@@ -1,0 +1,846 @@
+
+# Automatización en Azure: Databricks + ADF
+
+## 🚀 Volvamos a **Azure Data Factory (ADF)**
+
+Estamos aquí para completar el pipeline que ejecutará los notebooks de Databricks **de manera automática**. Pero antes… 🤔
+
+**¿Por qué usar ADF si desde Databricks también podemos automatizar los notebooks directamente?**
+
+👉 **La respuesta: Depende del escenario**.
+
+Aunque Databricks tiene sus propios mecanismos de orquestación, **ADF** sigue siendo la mejor opción cuando se necesita **coordinar múltiples servicios de Azure** o integrar **datos de diversas fuentes externas**.
+
+---
+
+### 🎯 El Caso de Nuestro Pipeline
+
+La razón principal de elegir ADF en nuestro caso es que, en el primer paso de nuestro pipeline, necesitamos conectarnos a un entorno **On-Premises** o **Local**. Esto nos permitirá **importar o migrar la base de datos** desde **SQL Server** en la VM.
+
+Y, como ya sabemos, para lograr esto, creamos un **Runtime** que se encarga de establecer la conexión entre **SQL Server** y **ADF**. Así, podremos completar el pipeline de **extremo a extremo** dentro de ADF.
+
+---
+
+## 📌**Databricks vs ADF**
+
+### 📈 **Automatización en Databricks**
+
+#### Opciones para ejecutar notebooks automáticamente:
+
+1. **Jobs en Databricks** 🧑‍💻  
+    Permiten programar notebooks con una frecuencia definida (diaria, semanal, por horas). Estos jobs pueden ejecutarse en **clústeres nuevos o existentes**, y configurarse con **parámetros, dependencias y alertas**.
+    
+2. **Databricks REST API** 🌐  
+    Permite integrar la ejecución de notebooks en **sistemas externos** o dispararlos desde aplicaciones personalizadas.
+    
+3. **Databricks Workflows (Jobs + Lakeflow Jobs)** 🔄  
+    En los últimos años, Databricks ha fortalecido sus capacidades de orquestación con **Workflows**. Estos permiten crear pipelines de datos más complejos, encadenar tareas (**notebooks, scripts, SQL, ML, etc.**), establecer **dependencias, reintentos y monitoreo**.  
+    Además, en 2025, Databricks introdujo **Lakeflow Jobs**, que mejoran la visibilidad y trazabilidad de los pipelines de datos, utilizando tablas del sistema como:  
+    `system.lakeflow.pipelines`.
+    
+
+#### ✅ **Conclusión sobre Databricks**
+
+Si todo el flujo de trabajo está contenido dentro de **Databricks**, los **Workflows** son suficientes y te permiten reducir la necesidad de herramientas adicionales como ADF.
+
+---
+
+### 🤖 **¿Por qué usar Azure Data Factory?**
+
+Aunque **Databricks** tiene opciones robustas, **ADF** sigue siendo la mejor opción cuando:
+
+#### 🔧 **Ventajas de ADF:**
+
+|**Beneficio**|**Descripción**|
+|---|---|
+|**Orquestación Multiservicio** 🛠️|ADF puede coordinar **Databricks** junto con otros servicios de Azure: SQL Database, Synapse, Cosmos DB, etc.|
+|**Monitoreo Centralizado** 📊|Un panel único para gestionar ejecuciones, alertas y errores en **pipelines** que incluyen múltiples servicios.|
+|**Escalabilidad y Flexibilidad** 🌍|Crea flujos de datos complejos y altamente configurables.|
+|**Integración Nativa con Azure** 🔗|ADF es el orquestador ideal cuando tu arquitectura involucra varios servicios de **Azure**.|
+
+---
+
+### 🎯 **¿Cuál Usar? Conclusión Final**
+
+🔹 **Si tu flujo de trabajo es interno a Databricks** (solo notebooks, tablas, ML, transformaciones), usar **Workflows de Databricks** es suficiente, más **simple y fácil de mantener**.
+
+🔹 **Si tu flujo de trabajo requiere integrar múltiples sistemas de Azure** o servicios externos, **ADF es la opción más robusta** para orquestar todo el proceso de manera **escalable** y **mantenible**.
+
+---
+
+### 🔑 **Lo Importante**: **¡Se complementan!**
+
+Ambas herramientas se complementan perfectamente:
+
+- **Databricks** como motor de procesamiento y Workflows internos.
+    
+- **ADF** como orquestador multiservicio cuando hay arquitecturas más complejas y distribuidas.
+    
+
+**¡Elige sabiamente según tu necesidad!** 🤝
+
+---
+
+📌 **NOTA IMPORTANTE**: Aunque Databricks y ADF pueden hacer tareas similares, la clave está en el **alcance** de tu flujo de trabajo y cuántos servicios deseas integrar..
+
+---
+
+## 🔑 **Job ADF: Conectando Databricks a Azure Data Factory** 🚀
+
+Ahora que tenemos claro **por qué usar ADF** para automatizar los notebooks de Databricks, debemos realizar algunos pasos previos antes de continuar con la integración. 🎯
+
+---
+
+### 🛠️ **Pasos Previos: Token de Acceso**
+
+Para que ADF se conecte a **Databricks**, necesitaremos crear un **Linked Service**. Esto nos permitirá acceder tanto al cómputo de Databricks como a los notebooks creados en las etapas anteriores (**Bronze To Silver** y **Silver To Gold**).
+
+🔔 **Nota**: Aunque **Azure Databricks** es un servicio nativo dentro de Azure, no se conecta automáticamente con ADF, como lo haría, por ejemplo, **Azure SQL Database** o **Blob Storage**. Por lo tanto, **debemos configurar la autenticación explícitamente**.
+
+---
+
+### 🗝️ **Tokens de Acceso en Databricks**
+
+#### ¿Qué es un **Personal Access Token (PAT)**?
+
+Los **PATs** son credenciales que permiten a servicios externos (como ADF) autenticarse contra la API de **Databricks**.
+
+✅ **Ventajas de usar PAT**:
+
+- Se pueden generar fácilmente desde la UI de **Databricks** en **User Settings > Access Tokens**.
+    
+- Los tokens están asociados a un usuario específico y heredan sus permisos dentro de Databricks.
+    
+- Puedes definir fechas de expiración, lo que **obliga a rotar los tokens** periódicamente.
+    
+
+🔒 Para usar el token en ADF, simplemente lo incluimos en el **Linked Service**, junto con la URL de la instancia de Databricks (ejemplo: `https://adb-1234567890.azuredatabricks.net`).
+
+---
+
+### 🔄 **Alternativas Más Actuales (2025)**
+
+Aunque los **PATs** son totalmente válidos, en entornos de producción se recomienda usar **autenticación basada en Azure Active Directory (AAD)**. 🚀
+
+#### **Opción 1: Service Principals con AAD** 🌐
+
+- Permiten crear **identidades de aplicación** para que ADF se conecte a Databricks **sin depender de un usuario humano**.
+    
+- **Beneficios**: mayor seguridad, **rotación automática de credenciales** y cumplimiento con políticas corporativas.
+    
+
+#### **Opción 2: Managed Identity** 🔑
+
+- ADF puede usar su propia **identidad administrada** para autenticarse directamente en **Databricks**.
+    
+- **Ventajas**: Elimina la gestión manual de tokens y es ideal para arquitecturas sin credenciales estáticas.
+    
+
+---
+
+#### ⚖️ **Comparativa: PAT vs AAD (2025)**
+
+|**Opción**|**Ventajas**|**Uso Recomendado**|
+|---|---|---|
+|**PAT (Personal Access Token)**|✔️ Configuración rápida y sencilla|✅ Entornos de desarrollo o prueba|
+|**AAD con Service Principals**|✔️ Alta seguridad, rotación automática de credenciales, cumplimiento de políticas|✅ Entornos productivos|
+|**Managed Identity**|✔️ No requiere gestión manual de credenciales, ideal para arquitecturas modernas|✅ Arquitecturas sin credenciales estáticas|
+
+---
+
+#### 🎯 **Recomendación Final**
+
+- **Para entornos de prueba o desarrollo**: **Usa tokens personales (PAT)**, ya que son rápidos de configurar.
+    
+- **Para entornos productivos**: **Usa AAD con Service Principals o Managed Identity**. Esto aumenta la seguridad y simplifica la gestión de credenciales a largo plazo.
+    
+
+---
+
+📌 **NOTA**: La clave está en elegir la opción que mejor se ajuste a **tu flujo de trabajo** y **requerimientos de seguridad**.
+
+---
+
+### 🗝️ **Generar Token de Acceso para ADF - Databricks**
+
+Para completar la integración con **Azure Data Factory (ADF)**, necesitamos generar un **Token de Acceso Personal (PAT)** en **Databricks**. Sigue estos pasos:
+
+---
+
+#### 1️⃣ **Acceder a tu Workspace de Databricks**
+
+* Abre tu **Workspace de Databricks**.
+* En la zona lateral superior, haz clic en tu **cuenta de usuario**.
+* Luego selecciona la opción **Settings**.
+  ![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img279.png)
+
+---
+
+#### 2️⃣ **Acceder a la opción Developer**
+
+* Desde el panel **Settings**, selecciona la opción **Developer**.
+* Después haz clic en **Manage**.
+  ![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img280.png)
+
+---
+
+#### 3️⃣ **Generar Nuevo Token**
+
+* En la sección **Manage**, haz clic en **Generate new token**.
+  ![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img281.png)
+
+---
+
+#### 4️⃣ **Configurar el Token**
+
+* **Comentario**: Añade una descripción para tu token (por ejemplo: "Token para ADF").
+* **Lifetime**: Establece la duración del token. Por defecto, es de **90 días**, pero puedes ajustarlo según tus necesidades.
+* Haz clic en **Generate** para crear el token.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img282.png)
+
+> **¡Importante!**: **Copia el Token** inmediatamente y guárdalo en un lugar seguro, ya que no podrás verlo nuevamente.
+
+---
+
+¡Listo! Ahora tienes tu **Token de Acceso Personal (PAT)** generado para usarlo en el **Linked Service** de **Azure Data Factory**. 🚀
+
+
+### 🔐 **Gestionar el Token de Acceso con Azure Key Vault** 🛡️
+
+Como ya sabemos, **Azure Key Vault** es una excelente herramienta para administrar y proteger nuestras **credenciales** de manera segura. Ya utilizamos Key Vault para gestionar credenciales de **SQL Server**, ¡ahora haremos lo mismo con el **Token** de **Databricks** para ADF!
+
+---
+
+#### 1️⃣ **Acceder a Azure Key Vault**
+
+* Abre el servicio **Azure Key Vault** desde el **grupo de recursos** de tu proyecto.
+* En el panel izquierdo de **Key Vault**, selecciona **Secrets**.
+* Luego haz clic en **Generate/Import** para crear un nuevo secreto.
+  ![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img283.png)
+
+---
+
+#### 2️⃣ **Configurar el Secreto del Token**
+
+* **Nombre**: En el campo **Name**, coloca el nombre del secreto, por ejemplo: **ADFToken**.
+* **Valor del Secreto (Secret Value)**: Pega el **Token** de acceso que generaste anteriormente en Databricks.
+* Haz clic en **Create** para almacenar el secreto de manera segura.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img284.png)
+
+
+---
+
+#### ✅ **Resultado Final**
+
+Ahora, tu **Token** de Databricks estará almacenado y protegido en **Azure Key Vault**. ADF podrá acceder a este secreto para gestionar la autenticación automáticamente y de forma segura, evitando la necesidad de manejar el token directamente.
+
+---
+
+#### 🔑 **¿Por qué usar Azure Key Vault?**
+
+* **Seguridad**: Protege credenciales y secretos como el Token de acceso.
+* **Accesibilidad**: ADF puede acceder automáticamente al token almacenado.
+* **Automatización**: Gestiona la rotación de credenciales y mejora el cumplimiento de políticas de seguridad.
+
+
+----
+
+## 🌐 **¿Qué es un Linked Service en ADF?** 🔗
+
+En **Azure Data Factory (ADF)** y servicios similares como **Synapse**, un **Linked Service** es una conexión configurada a un **servicio externo**. ¡Es un componente clave para integrar y coordinar diferentes servicios dentro de tus pipelines!
+
+---
+
+### 🎯 **Funciones de un Linked Service**
+
+#### 1️⃣ **Conexión a Servicios Externos**
+
+- **Definir cómo se conecta** ADF con el servicio externo (por ejemplo, la **URL**, las **credenciales** y la **configuración de autenticación**).
+    
+
+#### 2️⃣ **Uso en Pipelines**
+
+- Permite que **ADF** utilice el servicio para realizar actividades dentro de los pipelines:
+    
+    - Ejecutar **notebooks** de Databricks
+        
+    - Ejecutar **jobs**
+        
+    - Leer y **escribir datos**
+        
+    - Y mucho más...
+        
+
+#### 3️⃣ **Separación de la Lógica**
+
+- **Separa** la lógica de **qué hacer** (las actividades dentro del pipeline) de la lógica de **cómo conectarse** (la configuración de autenticación y acceso a los servicios).
+    
+
+---
+
+### 🧩 **Linked Service para Azure Databricks**
+
+En el contexto de **Azure Databricks**, el **Linked Service** define cómo ADF se conecta a un **workspace de Databricks**. Esto permite a **ADF** usar Databricks para ejecutar actividades como:
+
+- **Ejecutar notebooks**.
+    
+- **Ejecutar trabajos**.
+    
+- **Acceder a datos** almacenados en Databricks.
+    
+
+---
+
+### 🚀 **KEYS**
+
+- **Centraliza la configuración** de la conexión a servicios externos.
+    
+- **Facilita la gestión de la autenticación**, ya que permite almacenar y gestionar credenciales de manera segura.
+    
+- Hace que tus pipelines sean **más modulares** y reutilizables, separando la lógica de conexión de la lógica de procesamiento.
+    
+
+---
+
+### 🔑 **Recuerda**: 
+
+Un **Linked Service** no es una actividad en sí, sino una **configuración** que le dice a ADF cómo conectarse a otros servicios (como Databricks) para luego usar esos servicios dentro de los pipelines.
+
+## 🔗 **Crear un Linked Service en ADF para Azure Databricks** 
+
+¡Vamos a conectar **Azure Data Factory (ADF)** con **Azure Databricks**! Este es un paso clave para poder ejecutar **notebooks**, **jobs** y otras actividades desde ADF. Aquí te dejo los pasos con un formato fácil de seguir.
+
+---
+
+### 1️⃣ **Acceder al Workspace de ADF**
+
+* 🔹 **Abre el Workspace** de ADF.
+* 🔹 En el **panel izquierdo**, selecciona **Manage**.
+* 🔹 Haz clic en **Linked Services** y luego en **New** para crear un **Nuevo Linked Service**.
+  ![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img277.png)
+
+---
+
+### 2️⃣ **Seleccionar Azure Databricks**
+
+* 🔍 En el panel de **Nuevo Linked Service**, busca en la sección **Compute**.
+* 🔍 Selecciona **Azure Databricks**.
+* 🔄 Haz clic en **Continue** para avanzar a la configuración.
+  ![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img278.png)
+
+---
+
+### 3️⃣ **Completar el Formulario de Configuración** 📝
+
+Ahora vamos a configurar **paso a paso** todo lo necesario para que ADF se conecte correctamente a **Azure Databricks**.
+
+#### Formulario de Configuración:
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img240.png)
+
+
+| **Campo**                                   | **Descripción**                                                                                                              |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| 🖥️ **Connect via Integration Runtime**     | Usa **AutoResolveIntegrationRuntime**. ADF gestionará el runtime automáticamente según la región.                            |
+| 🔐 **Azure Subscription**                   | Selecciona la suscripción de **Azure** donde está desplegado el **workspace de Databricks**.                                 |
+| 🏢 **Databricks Workspace**                 | Define el **workspace** específico al que ADF se conectará (ej: `z2h-databricks-suffix`).                                    |
+| 💻 **Select Cluster**                       | Elige un **Existing interactive cluster** para ejecutar notebooks y jobs.                                                    |
+| 🌐 **Databricks Workspace URL**             | Introduce la **URL** de la instancia de Databricks (ej: `https://adb-...azuredatabricks.net`).                               |
+| 🔑 **Authentication Type**                  | Selecciona **Access Token**, pero con la integración de **Azure Key Vault**.                                                 |
+| 🔐 **Azure Key Vault (AKV) Linked Service** | Vincula tu **Key Vault** con el **Linked Service** para acceder al **token** de forma segura.                                |
+| 📜 **Secret Name**                          | El nombre del secreto en Key Vault será **ADFToken**, donde ADF obtendrá el token de acceso automáticamente.                 |
+| 🔄 **Choose from Existing Clusters**        | Selecciona un **clúster existente** de Databricks para las ejecuciones (ej: `Z2h Cluster 2025-09-11`).                       |
+| 🧪 **Test Connection**                      | Haz clic en **Test connection** para verificar que la conexión se realizó correctamente. 🌟 Con un mensaje verde ✅ de éxito. |
+| 💾 **Create**                               | Haz clic en **Create** para guardar el **Linked Service**. ¡Listo para usarlo! 🎉                                            |
+
+---
+
+### ⚙️ **Testea la Conexión** 🔍
+
+* 🚀 Haz clic en **Test connection** para asegurarte de que **ADF** puede conectar con **Databricks**.
+* ✅ **Conexión Exitosa**: Si todo está bien, verás un mensaje verde que dice **Connection Successful**.
+
+---
+
+### 🏁 **¡Crea el Linked Service!**
+
+* Haz clic en **Create** para **guardar** el **Linked Service**.
+* ¡Listo! Ahora **ADF** está **conectado** a **Databricks** y listo para ejecutar **notebooks** y **jobs**.
+
+---
+
+#### 🎯 **Recapitulando**: ¿Qué lograste?
+
+* Conectaste **ADF** con **Azure Databricks** de forma segura, usando **Azure Key Vault** para almacenar el **token**.
+* Ahora puedes **ejecutar notebooks** y **jobs** directamente desde **ADF**.
+
+---
+
+📌 **NOTA IMPORTANTE** 🛠️
+
+➡️ ¡Este paso es **esencial** para integrar Databricks en tus pipelines de ADF! Si sigues los pasos correctamente, tendrás acceso a todos los beneficios de la automatización en Databricks, con la seguridad de **Azure Key Vault**.
+
+### ✔**Guardar los cambios**
+
+✅Ahora solo debes guardar los cambios solo debes seleccionar **Publish all** 
+
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img241.png)
+
+
+## 🚀 **Edición del Pipeline en Azure**
+
+¡Todo listo! Ahora vamos a editar el **Pipeline** que creamos en las secciones anteriores. 💻
+
+🛠️ **Listo, con todo lo anterior realizado**, ahora vamos a **editar el Pipeline** que creamos en las secciones anteriores.
+
+### **1️⃣ Selección del Pipeline:**
+
+👈 Desde el panel izquierdo, selecciona **Author**.  
+📂 En la sección **Pipelines**, haz clic en el Pipeline llamado **copy_all_tables**.  
+🔍 En el _toolbox_, escribe **Notebook**.
+
+📦 Luego, simplemente **arrastra el Notebook de Databricks** hacia la **zona del lienzo**, justo a la derecha del contenedor **ForEach** ➡️📝
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img242.png)
+
+---
+
+### **2️⃣ Asignación de nombre al Notebook:**
+
+Ahora vamos a darle un nombre a nuestro Notebook:
+
+* Haz clic en la actividad **Notebook** desde el lienzo para abrir las opciones.
+* En la pestaña **General**, en **Name**, asigna el nombre: `**Bronze-to-Silver**`.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img243.png)
+
+---
+
+### **3️⃣ Conexión de actividades (ForEach → Notebook):**
+
+**Conectando el `ForEach` con el `Notebook` (Databricks):**
+
+* 🛠️ En la actividad `ForEach`, conecta la actividad **Notebook (Bronze-to-Silver)**.
+* **Importante:** La conexión de flujo de control es crucial, como se resalta en rojo en la imagen.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img244.png)
+
+#### ✅ **Pasos para conectar actividades:**
+
+| **Acción** | **Descripción**                                                                      | **Icono** |
+| ---------- | ------------------------------------------------------------------------------------ | --------- |
+| **Paso 1** | Pasa el mouse por el borde derecho de la actividad interna en `ForEach`.             | ➡️        |
+| **Paso 2** | Verás varios íconos, selecciona el **ícono verde con check (✔️)**: **Success Path**. | ✔️        |
+| **Paso 3** | **Arrastra** la flecha hacia la actividad de tipo `Notebook`.                        | ⬅️        |
+
+📝 Esto indica que:
+👉 **Si la actividad dentro del `ForEach` termina con éxito**, entonces ejecutar la siguiente actividad (el Notebook).
+
+---
+
+### **4️⃣ Verificación de conexión exitosa**
+
+Una vez realizado este paso, verás cómo las actividades quedan conectadas correctamente.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img245.png)
+
+---
+
+### **5️⃣ Selección de Linked Service de Databricks:**
+
+Finalmente, en la pestaña **Azure Databricks**:
+
+* Ve a la sección **Databricks linked service** en el toolbox.
+* Selecciona el **Linked Service** que creaste anteriormente (en este caso, **AzureDatabricks1**).
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img246.png)
+
+---
+
+🔑 **NOTA IMPORTANTE:**
+
+* Asegúrate de que el **Linked Service** que seleccionas esté configurado correctamente para evitar errores de conexión más adelante.
+
+---
+
+### **6️⃣ Selección de la actividad Notebook:**
+
+* Vuelve a seleccionar la actividad **Notebook**.
+* En las opciones, selecciona **Settings** y luego haz clic en **Browse**.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img247.png)
+
+---
+
+### **7️⃣ Navegar en el Workspace de Databricks:**
+
+Ahora vamos a navegar dentro del **Workspace de Databricks** para encontrar los **Notebooks** que se usarán en tu pipeline.
+
+* Aparecerá una ventana de exploración con tres carpetas principales en el directorio raíz:
+
+  * 📁 **Repos**
+  * 📁 **Shared**
+  * 📁 **Users** (resaltada en la imagen)
+
+Debes hacer clic en la carpeta **Users**, ya que normalmente ahí se encuentran los notebooks personales o los compartidos entre equipos.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img248.png)
+
+---
+
+### **8️⃣ Selección del Notebook:**
+
+Dentro de la carpeta **Users**, navega a los subdirectorios hasta encontrar el Notebook **Bronze to Silver**.
+
+1. Selecciona el **Notebook** llamado **Bronze to Silver**.
+2. Haz clic en **"OK"** para vincularlo a la actividad Notebook en tu pipeline de ADF.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img249.png)
+
+---
+
+### **9️⃣ Completado de la actividad Notebook:**
+
+¡Ya has completado la configuración para el Notebook **Bronze to Silver** en tu pipeline!
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img250.png)
+
+#### ✔**Ahora haz completado la actividad Notebook con el acceso al Notebook en Databricks **Bronze To Silver**
+
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img251.png)
+
+
+---
+
+## **🔁 Creación de una nueva actividad Notebook:**
+
+Repite el mismo proceso anterior, pero esta vez vamos a crear una nueva actividad Notebook. 💡
+
+1. **Arrastra** una nueva actividad **Notebook** al lienzo.
+2. Conéctala como lo hicimos entre **ForEach** y **Bronze-to-Silver**.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img252.png)
+
+---
+
+### **🔗 Conexión de Notebooks:**
+
+Conecta el **Notebook** recién creado con el siguiente paso de tu pipeline:
+
+* Conéctalo tal como conectaste el **ForEach** con el **Bronze-to-Silver**.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img253.png)
+
+---
+
+### **🔖 Asignación de nombre al nuevo Notebook:**
+
+1. Selecciona la nueva actividad **Notebook**.
+2. Asigna el nombre **Silver-To-Gold**.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img254.png)
+
+---
+
+### **🔄 Selección del Linked Service:**
+
+Recuerda que en la pestaña **Azure Databricks**:
+
+* En la sección **Databricks linked service**, selecciona el **Linked Service** que creaste anteriormente, que en este caso es **AzureDatabricks1**.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img255.png)
+
+---
+
+### **🔍 Navegar de nuevo en el Workspace:**
+
+Repitamos el proceso anterior:
+
+1. Selecciona la nueva actividad **Notebook**.
+2. Ve a **Settings** y haz clic en **Browse**.
+3. Navega nuevamente dentro del **Workspace de Databricks**:
+
+* 📁 **Repos**
+* 📁 **Shared**
+* 📁 **Users** (resaltada)
+
+Selecciona la carpeta **Users** para encontrar el Notebook correspondiente.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img256.png)
+
+---
+
+### **🔎 Selección del Notebook **Silver to Gold**:**
+
+Dentro de la carpeta **Users**, selecciona el Notebook **Silver to Gold** y haz clic en **"OK"** para vincularlo.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img257.png)
+
+---
+
+### **🔏 Completado de la actividad Notebook:**
+
+¡Has vinculado el Notebook **Silver to Gold** correctamente a tu pipeline!
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img258.png)
+
+---
+
+### **✅ Guardar los cambios:**
+
+Para finalizar, asegúrate de guardar todos los cambios que realizaste:
+
+* Haz clic en **Publish all** para guardar el pipeline.
+
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img259.png)
+
+---
+
+🎉 ¡Todo listo! Ahora tu pipeline está completamente configurado con ambos Notebooks: **Bronze to Silver** y **Silver to Gold**. 🏅
+
+
+## 🚀 **Test de Conexión y Ejecución del Pipeline en Azure Data Factory (ADF)**
+
+---
+
+### 🧪 **Paso 1: Verificar la Conexión al Contenedor Docker SQL Server**
+
+Antes de lanzar el pipeline, **asegúrate de que el contenedor Docker esté activo** en tu máquina virtual (Machine-0) 🖥️. Esto es importante porque el pipeline volverá a conectarse para migrar nuevamente las tablas al contenedor **Bronze**.
+
+➡️ **Acción:**
+Desde el **Runtime**, completa los campos de conexión requeridos y haz clic en **Test**.
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img261.png)
+
+---
+
+### 🔍 **Paso 2: Validar Conexión desde ADF**
+
+➡️ Selecciona la actividad `look for all tables`
+➡️ En la pestaña **Settings** → sección **Source dataset**
+➡️ Haz clic en **Open**
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img262.png)
+
+🔄 Esto abrirá el dataset **SqlServerTables**
+➡️ Ve a la pestaña **Connection** → haz clic en **Test connection**
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img263.png)
+
+📝 **NOTA IMPORTANTE:**
+Asegúrate de que el puerto `1433` esté expuesto desde **VSCode**. El Runtime necesita ese acceso para que ADF pueda conectarse correctamente.
+
+---
+
+### 🧨 **Paso 3: Ejecutar el Pipeline**
+
+¡Listo! Es momento de ejecutar nuestro _pipeline_ y poner en marcha todas las actividades configuradas
+
+➡️ En el lienzo, haz clic en el ícono **Add trigger**
+➡️ Selecciona **Trigger now**
+
+Esto iniciará la ejecución del _pipeline_ junto con todas las actividades que lo componen.
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img260.png)
+
+🆗 Aparecerá una ventana de confirmación: haz clic en **OK**
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img265.png)
+
+---
+
+### ⏱️ **Paso 4: Monitorear la Ejecución**
+
+Una vez que un pipeline ha sido ejecutado en **Azure Data Factory**, podemos hacerle seguimiento y monitoreo desde la sección **Monitor**. Esta funcionalidad permite revisar el estado de ejecución, duración, errores, parámetros utilizados, y mucho más.
+
+🧭 Desde el menú lateral izquierdo en ADF
+➡️ Haz clic en el ícono de **Monitor (🕒)**
+➡️ Luego selecciona **Pipeline runs**
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img266.png)
+
+---
+
+#### 🛠️ Funciones del Panel de Monitor
+
+| 🔧 Funcionalidad           | 💡 Descripción                                        |
+| -------------------------- | ----------------------------------------------------- |
+| **Ver Estado**             | ✅ Éxito / ❌ Fallido / 🔄 En progreso / ⏸️ Cancelado   |
+| **Info clave**             | Nombre, fecha, duración, ejecutado por, parámetros    |
+| **Actualizar**             | Clic en **Refresh** para ver el estado en tiempo real |
+| **Ver detalles**           | Haz clic en el nombre del pipeline                    |
+| **Exportar CSV**           | Para auditoría o análisis externo                     |
+| **Re-ejecutar o cancelar** | Con los botones **Rerun** o **Cancel options**        |
+
+---
+
+✅ **Claves del Panel de Monitoreo:**
+
+* Ideal para depurar errores 🐞
+* Seguimiento completo de ejecuciones 🔍
+* Evaluar duración de cada actividad 🕐
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img268.png)
+
+---
+
+### 🧩 **Paso 5: Validar Ejecución de Actividades**
+
+Si validamos el estado de las actividades notarás que cada actividad se ejecuta una por una en el orden que establecimos para cada actividad. En este caso, vemos que la actividad de "Lookup" se ejecutó primero con éxito, seguida de la actividad "ForEach Schema Table", que también fue exitosa. Luego, las actividades "Copy Each Table" se ejecutaron de manera secuencial, y finalmente, el proceso continúa con la actividad de notebook llamada "Bronze-to-Silver", que actualmente está en progreso.
+
+Esto demuestra cómo cada paso depende del anterior para avanzar al siguiente, lo que garantiza que el flujo de trabajo se ejecute correctamente y en el orden deseado. Por ejemplo:
+
+```plaintext
+1. Lookup ✅
+2. ForEach Schema Table ✅
+3. Copy Each Table ✅
+4. Bronze-to-Silver 🔄
+```
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img267.png)
+
+📝 **NOTA:**
+>A diferencia de cuando ejecutamos los Notebooks en el entorno de Databricks, donde utilizamos el Serverless, este ejecuta las consultas aparentemente más rápido, ya que el encendido del clúster es mucho más rápido que los clústeres creados manualmente. 
+>
+>En nuestro caso, creamos el clúster **z2h-Cluster**, que es el clúster que esta utilizando actualmente en ADF para ejecutar las actividades del Notebook. Si te fijas en la actividad **Bronze-to-Silver** en la imagen, marcada como **In Progress**, podemos ver que lleva más de 3 minutos en ejecución, y esto en parte es causado por la demora en el encendido del clúster.
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img269.png)
+
+---
+
+### 🗂️ **Paso 6: Validar la Capa Bronze en el Storage**
+
+Si te diriges al **Storage** y revisas el contenedor **bronze** en la carpeta **SalesLT**, fijémonos en la fecha **9/3/25**. Recordemos que el script en el Notebook **Bronze To Silver** sobreescribe los datos transformados en **Silver** en formato **Delta Lake**, reemplazando lo anterior si existía.
+
+Revisa el contenedor **bronze**, carpeta **SalesLT**
+
+* Fecha: `9/3/25`
+* Validación de sobreescritura de datos en Delta Lake
+
+📦 Código del notebook:
+
+```python
+df.write.format("delta").mode("overwrite").save(output_path)
+```
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img270.png)
+
+Esto lo podemos confirmar si subes el nivel de la carpeta **SalesLT** a **Address**, donde puedes validar el archivo **Address.parquet**. En la imagen, podemos ver que el archivo tiene la fecha de modificación **9/23/2025**, lo que coincide con el proceso de sobreescritura de datos en el contenedor **bronze**, en contraste con la fecha **9/3/25** del folder **SalesLT**. Esto se debe a que el folder no necesitó ser creado, pero el archivo **parquet** anterior sí fue reemplazado por el más actual durante el proceso de transformación y sobreescritura de datos.
+
+📁 En la carpeta **Address**
+
+* Archivo `Address.parquet` actualizado: `9/23/2025`
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img272.png)
+
+---
+
+### 🪙 **Paso 7: Validar la Capa Silver-to-Gold**
+
+Ahora validemos cómo la actividad **Bronze-to-Silver** ya terminó de ejecutarse, y ahora se está llevando a cabo la actividad **Silver-to-Gold**, que está en estado **En progreso**.
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img271.png)
+
+
+📦 Si revisas el contenedor **Silver** en el almacenamiento, notarás que tenemos dos archivos Parquet con nombres diferentes. Esto sucede gracias a las capacidades de **Delta Lake**. Como se ve en la imagen, cada archivo tiene un nombre único vinculado a la partición y versión de los datos 🧩 —algo típico de cómo Delta gestiona la información para permitir actualizaciones y transacciones eficientes ⚡.
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img273.png)
+
+🚀 **Delta Lake** ofrece funciones avanzadas para gestionar datos de forma eficaz. Una de las más potentes es la **gestión de transacciones ACID** 🔐, que garantiza lecturas y escrituras consistentes y seguras, incluso en entornos distribuidos 🌐.
+
+🕒 Además, **Delta** soporta el **versionado de datos**, lo cual permite hacer actualizaciones incrementales y mantener un historial completo de los cambios 📚. Esto hace posible recuperar versiones anteriores sin complicaciones.
+
+🗂️ Gracias a la **compatibilidad con particiones**, se puede optimizar el rendimiento dividiendo grandes volúmenes de datos en secciones lógicas. A esto se suman las **operaciones de unión** y **filtros eficientes**, que aceleran el procesamiento de datos 🚅.
+
+🔄 Todo esto se consigue sin sacrificar flexibilidad ni integración con otras herramientas, convirtiendo a **Delta Lake** en una opción ideal para manejar grandes volúmenes de datos de forma confiable y eficiente 💡.
+
+📝 **NOTA:**
+Delta Lake guarda múltiples archivos **Parquet**, cada uno con versiones distintas. Esto permite transacciones ACID y versionado de datos.
+
+🔍 **Beneficios de Delta Lake:**
+
+* ✅ Transacciones **ACID**
+* 🔄 Versionado de datos
+* 🧩 Compatibilidad con particiones
+* ⚡ Consultas eficientes
+* 🔗 Integración con otras herramientas
+
+
+Las transacciones **ACID** son un conjunto de **principios** que garantizan que las operaciones en bases de datos (como insertar, actualizar o borrar datos) se realicen de manera **segura, confiable y coherente** —especialmente en sistemas distribuidos o con muchos usuarios a la vez.
+
+ACID es un acrónimo que representa:
+
+---
+📝 **NOTA:** ✅ Transacciones **ACID**
+
+🔒 **A – Atomicidad (Atomicity)**  
+Cada transacción se ejecuta **completa o no se ejecuta en absoluto**. Si algo falla a mitad de camino, todo se revierte.  
+👉 Ejemplo: Si transfieres dinero de una cuenta a otra, no puede salir el dinero sin entrar en la otra.
+
+🧠 **C – Consistencia (Consistency)**  
+La transacción debe llevar la base de datos de un **estado válido a otro también válido**, cumpliendo todas las reglas y restricciones.  
+👉 Ejemplo: Si una regla dice que un saldo no puede ser negativo, ninguna transacción debe violarla.
+
+🔄 **I – Aislamiento (Isolation)**  
+Varias transacciones pueden ejecutarse al mismo tiempo, pero deben comportarse como si se ejecutaran **una por una**.  
+👉 Ejemplo: Dos personas comprando el último producto al mismo tiempo: solo una debe lograrlo.
+
+🛡️ **D – Durabilidad (Durability)**  
+Una vez que una transacción ha sido confirmada (commit), **sus cambios persisten**, incluso si ocurre una falla del sistema después.  
+👉 Ejemplo: Si guardas un pedido y luego se apaga el servidor, el pedido sigue estando ahí cuando vuelve.
+
+---
+
+### ✅ **Resultado Final del Pipeline**
+
+✅ Cuando finalice la ejecución de las actividades del **Pipeline**, verás completado todo el proceso de **transferencia y transformación de datos**, desde el paso inicial **Lookup** 🔍 hasta la última actividad **Silver-to-Gold** ✨.
+
+🖼️ En la imagen se puede ver que cada actividad ha tenido un **estado exitoso** ✅ y se ha ejecutado dentro del tiempo especificado ⏱️.
+
+📊 Esto confirma que las **tablas fueron correctamente procesadas** y que el flujo de datos entre las capas **Bronce 🥉, Plata 🥈 y Oro 🥇** se ha realizado como se esperaba, manteniendo la calidad y consistencia del proceso.
+
+Al terminar todas las actividades, verás el flujo completo:
+
+* Lookup → ForEach → Copy Table → Bronze-to-Silver → Silver-to-Gold
+* Todas con estado **✅ Satisfactorio**
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img276.png)
+
+---
+
+### 🛑 **Paso 8: Apagar el Clúster Manualmente**
+
+🛑 Por último, y no menos importante: **apaga manualmente el clúster de Databricks**.
+
+🕙 Aunque tiene un apagado automático configurado para 10 minutos, como se explicó antes, hacerlo manualmente te ayuda a **evitar el consumo innecesario de recursos** 💸 —y eso, al final, significa **menos costos en tu factura de Azure** 💼💰.
+
+👆 Un pequeño gesto que marca la diferencia en eficiencia y ahorro.
+
+➡️ Clic en **Stop** en el panel izquierdo del clúster
+
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img274.png)
+📷
+![](../../../../static/img/0%20-%20Programs/1%20-%20DataEngineering/6%20-%20Azure/img275.png)
+
+---
+
+### 🏁 ¡Pipeline Ejecutado con Éxito!
+
