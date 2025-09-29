@@ -1,0 +1,1273 @@
+# Transforming Data with dbt
+
+In this chapter, we will start to build a data application in dbt and touch on how to manage the data life cycle and organize the layers of our data application.
+
+After presenting our reference architecture and its benefits, we will introduce the sample application that will serve us for a few chapters, providing the use cases and the context for importing and managing some data and developing the transformations required to implement the use cases with dbt.
+
+By the end of this chapter, we will have started to develop our example application in dbt and will have done all the steps to create, deploy, run, test, and document a data application with dbt, even if this one is still a very simple one.
+
+The content of this chapter is the following:
+
+- The dbt Core workflow for ingesting and transforming data
+- Introducing your stock tracking project
+- Defining sources and providing reference data
+- How to write and test transformations
+
+![day-mode](https://subscription.packtpub.com/rebuild/build/assets/bookmark-grey-Da6_VjZz.svg)Bookmark
+
+# Technical requirements
+
+This chapter builds on the previous ones, so we expect a basic understanding of SQL, data modeling, and the data life cycle.
+
+To follow the examples, we expect you to have an account at dbt Cloud, connected with Snowflake and GitHub, as explained step-by-step in the first two chapters.
+
+The code samples of this chapter are available on GitHub at [https://github.com/PacktPublishing/Data-engineering-with-dbt/tree/main/Chapter_05](https://github.com/PacktPublishing/Data-engineering-with-dbt/tree/main/Chapter_05).
+
+![day-mode](https://subscription.packtpub.com/rebuild/build/assets/bookmark-grey-Da6_VjZz.svg)Bookmark
+
+# The dbt Core workflow for ingesting and transforming data
+
+In this chapter, we will build our first full-blown dbt project, taking data from a source system and making it available for use in reporting, but let’s start with the big picture by describing the reference architecture for a modern data platform.
+
+In [_Chapter 4_](https://subscription.packtpub.com/book/data/9781803246284/4), we outlined the data life cycle. In the following image, we will start to visualize the layers of a modern data platform and start to tie them to how we build them with dbt:
+
+![Figure 5.1: Layers of a modern data platform](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_1.jpg)
+
+Figure 5.1: Layers of a modern data platform
+
+The layers are as follows:
+
+1. **Data sources**: We will use the full abilities of the underlying data platform to load the data coming from our data sources. In the case of Snowflake, this means being able to load data from files stored on major cloud providers, and of course, data residing in other Snowflake **databases** (**DBs**), whether our own or shared with us by others, such as partners, customers, or other departments.
+2. **Data storage**: We will read the data from the data sources, put it in the format we want to use for permanent storage on the data platform, and track the changes in the source data. We want to store data as close as possible to the source data, only applying a few technical steps that do not change the data, such as converting it into the correct data type (numbers or dates received as text), applying hard rules to data (removing padding zeros or spaces, converting to the desired time zone, or managing cases), and eventually flattening out data received as objects (from JSON, AVRO …) into SQL or relational, compliant data structures (as an example, separating invoice headers and invoice rows received as a single object).
+3. **Data refinement**: Here is where the real data transformation happens: turning raw data into useful information. The two main parts of this transformation are applying **Master Data** (**MD**) to convert source system-specific data into enterprise-wide usable data and then applying **Business Rules** (**BR**) to transform data into usable information.
+
+While the MD part can follow some guidelines and patterns, the BR part is where experienced analysts and data professionals really make the difference by keeping order and creating reusable data models instead of a spaghetti web of ad-hoc transformations with no organization.
+
+1. **Data delivery**: In the data delivery layer, we will have traditional reporting data marts that deliver data to reporting tools using a dimensional model, other data marts that provide data as wide tables, and other “marts” with more technical uses, providing a simple way to build and manage APIs for external tools, such as AI or ML workloads, or refined information that is taken back to the operational systems, such as updated customer profiles or full-fledged segments for use in marketing tools.
+
+The signature feature of the architecture that we propose is the separation of the source data ingestion from the application of the business logic and the creation of the business concepts.
+
+This core separation of concerns is the basis of our modern data platform idea, as it allows a lot of freedom in the details of the implementation and delivers the following substantial advantages:
+
+- Decoupling the two most important activities, ingesting and building the business concepts, simplifies the overall development, allowing the use of the best solution for each part of the problem.
+- The extensive use of patterns allows much quicker development, keeps complexity low, makes for easy people training, and offers reliable outcomes and predictable delivery times.
+- The preservation of the source data enables proper auditing, allows for advanced source system analysis and improvement, and guarantees that we are always able to use all our data, as the original data is not changed by the application of BR that might not be valid in future and the source data is not changed in ways impossible to revert.
+- A well-organized refined layer with a simple MD Management playbook, oriented dependencies that are easy to navigate, and a few recurrent types of models with clear roles allows us to build even the most complex business concepts without creating a huge spaghetti ball of code that quickly becomes too complex to manage and maintain.
+- The practice of constantly recreating the refined and delivery layers from the stored historical source data allows you to easily change MD and BR and have it immediately deployed to all of your data, removing any state that needs maintenance.
+- The ability to remove any accumulated state from the refined and delivery layers makes the system simple and quick to change and as easy to maintain as a stateless application, gaining back developer and stakeholder confidence and a lot of human effort previously spent on data repair or fix tasks. This is in direct contrast with legacy data warehouses where changes are constantly hindered by the need to preserve, backfill, and maintain the complex state caused by incremental loads and the incremental summarization of data.
+- The flexible delivery layer provides simple data mart personalization on top of a well-separated refined layer that is always up-to-date with MD and general BR and allows you to provide every department, customer, or external interface with all your data according to the latest data mart developments.
+- The external dependencies are easily managed with simple DB constructs such as users, roles, schema, and views, and access is intrinsically limited to the smallest possible surface thanks to the ability to quickly provide data marts to offer any desired API on top of your refined data.
+
+The following image visualizes the main effects on the implementation effort and costs in a modern warehousing project using the workflow we have described in this section compared to a traditional one where the focus is on data mart delivery without any separation of concerns:
+
+![Figure 5.2: The implementation effort and cost over time in a warehousing project](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_2.jpg)
+
+Figure 5.2: The implementation effort and cost over time in a warehousing project
+
+Now that we have a workflow to build our data platform, it is time to start learning how to use the features of dbt and Snowflake to solve real-world use cases.
+
+Through this and the following chapters, we will lead you toward building a complete data platform, from the source data to the data marts ready to serve out reports.
+
+The two main tools that we will use are a stock tracking data platform and the Snowflake sample data provided as a data share to every Snowflake account.
+
+We will start to build a very simple stock tracking data platform and incrementally transform it to incorporate more features to illustrate the dbt functionalities and the power of a modern agile development process.
+
+This sample data platform will provide the core lessons that you can follow step by step using low row-count examples that are easy to analyze and understand. The Snowflake sample data will be used when we want to specifically target big row-count use cases.
+
+![day-mode](https://subscription.packtpub.com/rebuild/build/assets/bookmark-grey-Da6_VjZz.svg)Bookmark
+
+# Introducing our stock tracking project
+
+We have chosen to build a simple stock tracking platform to illustrate the dbt functionalities, as it can be initially reduced to a simple set of concepts and relations while offering multiple ways to add complexity and interesting requirements to develop in further iterations.
+
+Using an example project that many people will relate to, we hope to provide easier understanding and involvement and maybe provide real value through the ability to start a project to track your stocks.
+
+It is, in fact, quite a common situation that a person or a family ends up having more than one account and that there are tradable securities in these accounts. A common desire is to therefore have a global view of all the accounts.
+
+With the advancement of fintech solutions, this is becoming simpler in modern portfolio applications if your accounts are in a single country, but you have them in different jurisdictions, then I wish you good luck, or you can roll up your sleeves and cook something that fits the bill together with us.
+
+Other common reasons that might make the use case valid are to keep your data independent from your brokers, so that your history will always be with you, or to personalize your reporting and analysis beyond what your current provider offers.
+
+As an example, I find that the attribution of categories such as industries and even countries are often missing or not aligned with the reality for many small and medium stocks, especially outside the US market. What country would you use for a Canadian company with mines in Mexico or Russia? Is that operation in a developed or a developing country? Is it exposed to Canadian dollars, Mexican pesos, or Russian rubles?
+
+## The initial data model and glossary
+
+This sample project is about being able to track the value of investments spread across multiple portfolios and analyze them in the ways we prefer. We will start simple, just tracking the current value of the portfolio, and we will add more functionalities along the next sections and chapters.
+
+The starting use case is that an investor has portfolios, potentially at different brokers, where they hold positions in securities. They can buy and sell securities, therefore opening, closing, and changing the positions they have.
+
+They would like to use the data they receive from the brokers to track the daily value of their overall situation and analyze their holdings according to multiple attributes of the securities.
+
+The following conceptual data model illustrates the main entities and their relations, as you could gather from the initial explanation of the use case.
+
+Note that in the data model, we do not have all the entities we named because we are more interested in showing the core “structural relations” and not fully denormalizing the data model, showing all existing entities and all their relations. As an example, we do not show the **Investor** entity, because for now, we can start with an `owner` or `owner_id` column inside the **Portfolio** entity:
+
+![Figure 5.3: The initial data model for the portfolio tracking project](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_3.jpg)
+
+Figure 5.3: The initial data model for the portfolio tracking project
+
+To provide for a common understanding it is good practice to provide a glossary with the description of the concepts of the data model, such as the following:
+
+- **Position**: A position tracks the amount of a specific security hold in a portfolio and comes with a few measures besides the amount of stock owned, such as the cost of the security hold in the position.
+- **Portfolio**: A portfolio is a container of positions, usually associated with a trading or custody account at a broker.
+- **Security**: A security is an investment instrument that can be bought and sold on a specific market. Securities exist in multiple types, including bonds, stock, options, and many others.
+- **Quote**: A security quote is a set of values, such as a bid and an ask price, that describe the market offering for the stock at a moment in time or a set of values that describe the market offering for the stock during an interval of time:
+    - **Daily quote**: A daily quote is a set of values, such as open, close, max, and min prices, that describe the market offering for the stock during a trading day.
+- **Calendar**: The calendar represents the time dimension at the desired resolution, often a day, providing useful precalculated attributes for all the items in the calendar.
+
+Throughout this chapter and the following chapters, we will start with very simple needs and features first and add complexity and features along the way to introduce more dbt or Snowflake features, and sometimes also to just show alternatives or how initial solutions might have limits.
+
+The idea is to go about it how you would with a real-life project: you start with some needs and by the time you have done half of what your people had in mind, new ideas emerge, and you find yourself steering the project toward new, more promising goals. You get the idea: change is the only constant.
+
+Therefore, bear with us if in some cases, we might change the idea abruptly or introduce a new need that might not be totally logical, but that’s done to utilize a dbt feature or introduce an interesting pattern. Here, it might serve as a skill progression but we will try to keep it not too far from what actual projects look like.
+
+## Setting up the project in dbt, Snowflake, and GitHub
+
+Now that we have described the project in broad strokes, it is time to roll up our sleeves and start building it.
+
+To get started and have a project ready in dbt, we need to have a repository set up in GitHub to host the code and a database set up in Snowflake to hold the data and deploy the code.
+
+We also need to make a few basic design choices to organize the project. We will briefly discuss them in the next _Portfolio tracking project_ _design_ section.
+
+In the following sections, we will quickly describe the steps that you need to do to get your project set up. If you are not sure how to do so yet, you can reference the step-by-step instructions we gave in [_Chapter 1_](https://subscription.packtpub.com/book/data/9781803246284/1) for Snowflake and [_Chapter 2_](https://subscription.packtpub.com/book/data/9781803246284/2) for GitHub and dbt.
+
+### Portfolio tracking project design
+
+This is a sample project, so we will keep the setup as simple as possible, but this is the occasion to discuss the alternatives we have for bigger projects:
+
+- **Database and environments**: For this project, we will use the ability of dbt to provide multiple parallel and independent environments in the same database by using prefixes. We will also only use two environments: a development environment for coding and a production environment for the stable release. This might already be overkill for a single-person project, but we want to do things well and it costs close to nothing in terms of money or time.
+
+In a real-world application, you might want to have all the developer environments in one DEV database, then a **Quality Assurance** (**QA**) or **Continuous Integration** (**CI**) environment in its own QA database to integrate all the developments, and finally, a production environment in its PROD database to hold the good data and run on stable releases.
+
+- **Git branches**: As we will only have DEV and PROD environments, we will use feature branches with the names you come up with for each feature in the DEV environment, while `main` (or `master` in older setups) will be the branch corresponding to the PROD environment.
+
+If you had QA and PROD environments, it would make sense for the `main` branch, where the developments are merged by default, to be associated with QA and then a long-running `PROD` branch to be associated with the PROD environment. The same pattern can be used if you would like to have more deployment environments, such as release candidates, between QA and PROD. We just advise you to keep things simple and agile.
+
+- **Users and roles**: We are going to use a single role, `DBT_EXECUTOR_ROLE`, for DEV and PROD. We will use our user for the DEV environment and create a user for the PROD environment. They will both use the executor role to run the dbt project.
+
+In a real-life scenario, you might want to have one writer role for each database or environment, and one or more readers, assigning to the developer’s user the DEV writer and the reader roles to the other environments, as you only want dbt to make controlled changes there when acting on manual commands from the developer. You might also want to create reader roles restricted to one data mart to control and manage the delivery of your data better, assigning these reader roles to the users depending on their access needs.
+
+- **Location and format of input data**: We want to give you ample coverage of the dbt-SF combined capabilities, so we will use data in CSV file format as source files included in the dbt source code repository (not always the best choice).
+
+In a real-life project, the use of CSV files stored in the project repository is useful but restricted to a few cases, and loading files is not manual but automatically done by a piece of data movement code that puts them in a file container, often external to SF, and dbt macros that load them.
+
+### Setting up the repository for the portfolio project
+
+We need a repository to hold the data, so let’s make a new, empty repository on GitHub:
+
+1. Log in to your profile on GitHub or the Git provider of your choice.
+2. Create a new repository with a name you like. We used `portfolio-tracking-dbt`, but you can pick the one you prefer and _leave it totally empty_, that is without a `README`, `gitignore`, `license`, or any other file.
+
+That’s it – we now have an empty repo that we can use with dbt.
+
+We will use the dbt integration with GitHub to do the connection from dbt, so no more work is left to be done here.
+
+### Setting up the database for the portfolio project
+
+We need a database in Snowflake and a user to run the production environment, so let’s do it.
+
+First, let’s recall the setup from [_Chapter 1_](https://subscription.packtpub.com/book/data/9781803246284/1), where we created a `DBT_EXECUTOR_ROLE` role for all the users that needed to run code in dbt.
+
+We have granted the ability to use the existing warehouse to run queries and create new databases. Then, we assigned that role to our user so that we can use it in the dbt DEV environment and to the `DBT_EXECUTOR` service user that we will configure to run the PROD environment.
+
+Therefore, we just have to create the database, as we are already fine with the two users we have.
+
+Create the new database using the executor role. We named it `PORTFOLIO_TRACKING`. If you change it, remember to consequently change all the commands and scripts that will use this name:
+
+USE ROLE DBT_EXECUTOR_ROLE;
+CREATE DATABASE PORTFOLIO_TRACKING
+    COMMENT = 'DB for the portfolio tracking project';
+
+CopyExplain
+
+Now that we have everything that we need, you can create a new dbt project.
+
+Note
+
+We have decided to create the database with the executor role, but another choice might be to use a different role to create the DBs and give the executor role the ability to create the schemata in that database.
+
+The main difference would be the ability (or the lack of the ability) of the executor role to drop the full database in a single command.
+
+### Creating a new dbt project for the portfolio project
+
+We have prepared the things we need, so we will be able to create the new project following the same steps that we have shown in the second chapter, which we will recall here:
+
+1. Click **Account Settings** from the dbt main menu (the hamburger tiles on the top left), click **Projects** in the left-hand menu, and then the **New Project** button on the top right.
+
+By clicking the **Begin** button (on the top right) you will start the guided setup.
+
+1. Enter a name for the project – we have used `Portfolio tracking`.
+
+Once you are done, click the **Continue** button.
+
+1. Select the **Snowflake** database by clicking on its logo or name. You will be taken to the page to set up your connection.
+2. In the **Connection Settings** page, enter the **Snowflake Settings** information, which is the general connection parameters that apply to all users, and your **Development Credentials** information, which is related to your user and your development environment.
+
+Note that you have just created the database you want to use with the role you want to use, so for the SF settings, you just need your Snowflake account (the part of your SF address between `https://` and `.snowflakecomputing.com`) and the execution warehouse name (the default is `COMPUTE_WH` and we have not changed it).
+
+Then, enter your SF user details, set **schema** to your initials, set **target name** to `dev`, and use 8 or 12 **threads** in the DEV environment credentials.
+
+Test your connection and click the **Continue** button when it is working.
+
+1. On the **Set Up a Repository** page, click on the **GitHub** button (or the one for your Git provider) and then select the repository that you want to use (the one we just created). When the import is successful, click on the **Continue** button, and you are done with the setup.
+
+Congratulations – you now have a new empty project set up in your dbt account!
+
+Note
+
+If you have a newer dbt account and you cannot create a second project for free, use the previous steps to change the first project that we have set up and the following ones to test and clear it from the default project.
+
+From the dbt overview page, select the **Start Developing** button to go to the **Integrated Development Environment** (**IDE**) or code editor. You can do the same by clicking the **Develop** item in the main menu.
+
+Once in the code editor, click the **initialize your project** button and dbt will generate the default dbt project for you. Click the **commit…** button to save it to the Git repo:
+
+![Figure 5.4: The dbt Cloud UI with the project content](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_4.jpg)
+
+Figure 5.4: The dbt Cloud UI with the project content
+
+Now, check that your project is correctly set up with two very simple checks:
+
+1. Enter the following SQL command in an empty scratchpad and click the **Preview** button:
+    
+    select 1
+    
+    CopyExplain
+    
+
+If the preview executes without errors and you see the **Returned 1 row.** result in the **Query results** panel and the `1` value in the results, then this means that you can connect to your database and run queries on it.
+
+1. Run the dbt default project by entering the `dbt run` command in the command line at the bottom of the code editor. If the run completes correctly, it means that you can create schemas, tables, and views in your DB. If you go to your Snowflake interface, you will find the schema (with the initials you entered in the project setup) and the two models (one table and one view) created in your database.
+
+This is all we need to be sure we can build our project with dbt and Snowflake.
+
+1. You can clean up the dbt default project by removing the `example` folder inside the `models` folder. If you do this, you can also clean up your database by dropping the two models or the entire schema if it does not contain anything else.
+
+Great! We have checked that our project is set up correctly and we are ready to start our portfolio project.
+
+![day-mode](https://subscription.packtpub.com/rebuild/build/assets/bookmark-grey-Da6_VjZz.svg)Bookmark
+
+# Defining data sources and providing reference data
+
+Every data warehousing project, in theory, can be reduced to finding the right data sources and their transformations to achieve the outputs that you want.
+
+In an ideal world, you can always find the data that you need and produce what you want, but life is usually more complicated, as you might not have all the data sources or information that you would like. The reality is that often you need to adapt your goals and see what you can achieve starting from what you have.
+
+In any case, defining your data sources is crucial, as they are what is provided to you, and by writing proper transformations, you can be the best steward of the information contained therein, unless you are in the rare position to change what the source systems collect or to design your data sources.
+
+## Defining data sources in dbt
+
+In dbt, you have two proper ways to designate and take into use external data, that is, data that is not created or transformed with dbt:
+
+- **Sources**: The general mechanism for using external data in dbt is to define the initial data you want to start your transformation as a _source, defined by a source system definition that points to a database and schema, and one or more table definitions that select one table or view from that database and schema_. Defining a source system and using a `source` reference is a great way to make the usage of data from a system that you consider born or managed externally to the current dbt project explicit, whether it is a properly external system or data that is managed by another dbt project and practically local.
+- **Seeds**: In dbt, you can put CSV files into designated folders and have dbt load them into a table with the `dbt seed` command. Note that this is not a general-purpose CSV data loading mechanism by design.
+- **Created data**: As strange as it sounds, in a DW project, some data can be created out of nowhere. A common example is the calendar dimension, but this is true for anything that can be generated by some logic and little starting data. These are treated as normal models, as with any other model where the logic part is overwhelming compared to the input data, even if these have no input outside variables or hardcoded values.
+- **Direct hardcoded references**: When you start writing code in dbt, it will be common for you to use direct references to actual database tables, as you do in normal SQL queries, instead of using the `source` and `ref` references. Please resist this at all costs. While this is technically a potential way to refer to external data, it is also a way to completely hinder your dbt project and defeat the benefits of dbt on many levels. We will mention just a few reasons to avoid direct references: making it impossible for dbt to run the project in the correct order, making it impossible to trace and visualize dependencies (lineage), making it impossible for your code to work on different environments managed by dbt, removing flexibility from your code, and making dbt unable to generate proper documentation. You see that it is not a good idea to directly name tables in your SQL instead of using the proper `ref` or `source` syntax.
+
+The proper way to structure a dbt project is to have your input defined in terms of `sources` and `seeds` and build your first layer of dbt models on top of them, then continue the transformation pipeline, referencing the previous models using the `ref` function, as explained in the _Introducing source and ref dbt functions_ section of [_Chapter 2_](https://subscription.packtpub.com/book/data/9781803246284/2).
+
+### Understanding and declaring dbt source references
+
+Using `source` references in your code, you can define the boundaries of your dbt project and have its dependencies properly visualized and managed.
+
+As an example, you can declare an SLA for the data freshness on a source system or a specific source table, write tests to define the expectations you have on the incoming data, or be able to manage the external data location in a very flexible way.
+
+A source is declared as metadata in a YAML file and can be defined for any database object that you can query with the normal `SELECT … FROM db.schema.source` syntax, so it includes external tables and similar database extensions that you can query directly in that form or that you can encapsulate in standard database objects such as views.
+
+The typical pattern to provide and access external data is that all the data from a specific system, real or logical, is made available inside a schema of a database that your dbt code can read from so that you identify the **source system** as the database and schema and the **source table** as a database object (table, view, or other) inside that system (database and schema).
+
+The following code gives you an idea of how a source system and a source table are defined:
+
+sources:
+  - name: <source system name>
+    database: <db name>
+    schema: <schema name>
+    description: <some description of the system>
+    freshness: **# system level freshness SLA**
+      warn_after: {count: 12, period: hour}
+      error_after: {count: 24, period: hour}
+    loaded_at_field: <default timestamp field>
+    tables:
+      - name: <name we want to use for the source table/view>
+        identifier: <name in the target database>
+        description: source table description
+
+CopyExplain
+
+Let’s decribe the above definition of a source system and a table inside it:
+
+- The initial `name` field defines the name of the source system that we are defining and it will be used to access it when using the `source` function in the SQL code.
+- The `database` and `schema` fields define the location to read from, as used in fully qualified database names. They are optional, defaulting to the database and schema declared in the project connection, but we suggest making them explicit unless they strictly follow the dbt project location.
+- The `description` field allows us to enter a human-readable description in the documentation.
+- The `freshness` and `loaded_at_field` fields allow us to define a system- or table-level data freshness SLA, which defines the maximum age for the most recent data in the source system tables before raising a warning or error and the timestamp field to query for the age of the data in the table.
+
+A system-level SLA or field applies to all tables defined under it and, as always in dbt, can be overridden at a lower level – in this case, at the table level.
+
+- The `tables` key introduces the declaration of individual source tables inside the defined system.
+- The `name` field under `tables` defines the name of the source table that we want to access and it will be the second element used to access it when using the `source` function in the SQL code. Unless you include an `identifier` field that provides the actual object name in the target database the `name` field will be used and it must match the object found in the source system location.
+
+Under this source table definition, you can declare all the available table properties and configurations, exemplified here by the `description` field, that we will see later in more detail for all models. As an example, this includes tests and tags.
+
+In general, consider that this is a normal YAML dbt file and you can use the general dbt properties and configs that exist and apply to sources.
+
+While you can define multiple source systems with different names pointing to the same database and schema, this is not generally a good idea, as having two names for the same thing creates confusion. One case where I can see good use of this is when you have been provided data from multiple systems into a single database and schema. By defining multiple source systems and picking the right tables, you can effectively separate what table comes from what system.
+
+### Special cases involving sources
+
+In general, sources are defined on data that is provided to us and the first contact with dbt is when we start reading that data from the source definition.
+
+While this remains the case at a logical and semantic level, in some loading patterns, we have dbt perform certain operations on the raw data received by a system and then define a source on the result of these operations, which will be the start of our dbt transformations.
+
+The most common example is when we use dbt to ingest data from files into a landing table.
+
+In this pattern, the step of loading the raw data from the files into the landing table is done by a dbt `run-operation`, which invokes a macro that executes the database command, such as `COPY INTO`. The `run-operation` is run before the actual `dbt run` is started and the landing table is defined as a source table so that when the dbt code is run, it properly references this external source with a `source` reference and our transformations start from the landing table, not from the files.
+
+Other common cases are when using an external table that is created by a dbt `run-operation` (or a run-once setup time query) or declaring a view that encapsulates a special database construct, such as federated queries in **Big Query** (**BQ**), to give access to non-native SQL data.
+
+Important tip
+
+In general, it is useful to use dbt to manage resource creation with `run-operations` or setup time queries and then define a source on the results of these setup or load tasks. The logic is to define the database object as a source from where you can start writing the SQL transformations that make up our dbt models.
+
+As you become familiar with the power of sources, you might be tempted to define fake sources as results of snapshots on models or models themselves, often to overcome the very sound limits that dbt upholds to avoid circular dependencies. Please refrain from this temptation. Unless you know exactly what you are doing and why, chances are you are putting yourself in a difficult position and maybe you can achieve the same in a different way that is more closely in line with how dbt works.
+
+### Understanding seeds
+
+The seed loading mechanism in dbt is not a general-purpose way to load high amounts of data from CSV files – it is only intended as a utility tool to load small amounts of data (up to hundreds or a few thousands of lines) that are strictly connected with the current project and do not make much sense to maintain or load in a different place or with a different tool.
+
+The data suitable to be loaded as a seed has the following properties: changes infrequently, is generally maintained by hand, and is suitable or even required to be versioned inside your Git repository to track changes.
+
+Examples of good seeds are hand-maintained lists of things such as test users or sample products, special mappings such as mapping user codes to internal employee codes, or reference data such as connecting country codes to country names and stats or currency codes to names.
+
+Bad cases for seed loading are big files, as they will load slowly and every copy will stay there forever, cluttering your Git repository, data that changes frequently, and data that contains personal or sensible information, as it will be recorded and exposed in clear text in your repo forever.
+
+To load the data from a CSV file, it is enough to put the file in the folder indicated in the project configuration file, directly or in a subfolder, and then run the `dbt seed` command. Of course, you can run the `dbt seed` command with switches to better control what seeds are to be loaded or re-loaded.
+
+The following line shows the seed configuration line inside the project configuration file, where you can name the folder to be searched for seeds:
+
+seed-paths: ["seeds"]
+
+CopyExplain
+
+If you do nothing else, the data will be loaded in a table with the same name as the CSV file and with the data types inferred by dbt and the destination database.
+
+Tables generated by seed loading can be accessed as normal dbt models using the `ref` function.
+
+For seeds, dbt offers the standard metadata driven approach of defining properties and configurations in a hierarchical way inside YAML files.
+
+Seed can be configured in the main configuration file under the `seed` key as exemplified in the following snippet, which shows the seed-specific configurations:
+
+seeds:
+  <resource-path>:
+    quote_columns: true | false
+    column_types:
+      column_name: datatype
+
+CopyExplain
+
+With the configuration, you can decide what database and schema the table are generated in, define which column names from the CSV file are quoted, and most importantly, declare the data type for each column so that you can choose it instead of relying on type inference by the target database, which will sometimes be off.
+
+To document and define tests on your seeds, you can use the usual YAML file mechanism, defining them as you would do on any other dbt model.
+
+In the following sections, we will exemplify the process using our portfolio tracking project.
+
+## Loading the first data for the portfolio project
+
+Now that we have a basic understanding of the functionalities of dbt in place, let’s see how they come into play in a real scenario by loading the data of our first portfolio that we want to track.
+
+Let’s start by loading the data about the portfolio that we assume to have at the fictional ABC Bank. Then, we will try to complete that information.
+
+### Loading your first export of portfolio data
+
+Every broker offers a way to download data about the investments we have with them, which we call a portfolio, with each investment being a position.
+
+The following table represents a minimal set of information that most banks will provide when exporting the data related to investments made with them. Many will provide much more data.
+
+In this example, we have three investments (positions) in stocks traded in three different markets (exchanges), two in the USA and one in Canada:
+
+![Figure 5.5: The data export of our fictional portfolio at ABC Bank](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_5.jpg)
+
+Figure 5.5: The data export of our fictional portfolio at ABC Bank
+
+To get our project started quickly, we can save this data as a CSV file – we could load it using the dbt seed feature. However, we explained in the previous section that this feature is not meant to load data that changes often, and it does not make much sense to have one CSV file in our Git repository for each day we update the portfolio, so this would be an abuse of this functionality.
+
+To keep the setup simple and avoid using an external file storage system (such as AWS S3, Google File Storage, or Azure Storage) or installing SnowSQL to load the files from your local filesystem, we will guide you on loading the CSV data in a table using the Snowflake **User Interface** (**UI**). In essence, we will manually execute the process that is normally done automatically to ingest file-based data. We will analyze the file-based loading patterns in detail in the final part of the book.
+
+The plan is therefore the following:
+
+1. Create the landing table that will hold the external data.
+2. Manually load the external data from the CSV file in the landing table.
+3. Define the landing table as our source table.
+4. Read the data from the source table to start our ELT.
+
+The goal of loading the data in a landing table and then defining a source on it is to provide a resilient way to use our data so that our ELT will not have to change if, at some point, we start loading this data in an automated way or from a different file storage system.
+
+Let’s get started, then!
+
+1. Earlier in this chapter, we created the `PORTFOLIO_TRACKING` database that we will use, so let’s start by using the executor role to create a `SOURCE_DATA` schema to hold the data that we load from external sources:
+    
+    USE ROLE DBT_EXECUTOR_ROLE;
+    
+    CopyExplain
+    
+    CREATE SCHEMA PORTFOLIO_TRACKING.SOURCE_DATA;
+    
+    CopyExplain
+    
+2. Now that we have a schema, we can create the `ABC_BANK_POSITION` table where we want to load the data for the ABC Bank portfolio:
+    
+    CREATE OR REPLACE TABLE
+    
+    CopyExplain
+    
+      PORTFOLIO_TRACKING.SOURCE_DATA.ABC_BANK_POSITION (
+    
+    CopyExplain
+    
+        accountID         TEXT,
+    
+    CopyExplain
+    
+        symbol            TEXT,
+    
+    CopyExplain
+    
+        description       TEXT,
+    
+    CopyExplain
+    
+        exchange          TEXT,
+    
+    CopyExplain
+    
+        report_date       DATE,
+    
+    CopyExplain
+    
+        quantity          NUMBER(38,0),
+    
+    CopyExplain
+    
+        cost_base         NUMBER(38,5),
+    
+    CopyExplain
+    
+        position_value    NUMBER(38,5),
+    
+    CopyExplain
+    
+        currency          TEXT
+    
+    CopyExplain
+    
+    );
+    
+    CopyExplain
+    
+
+The preceding statement creates a table with the same columns and data types and in the same order as our CSV file so that we can easily load it.
+
+Now that we have the table to hold the data, we can load it using the Snowflake interface:
+
+1. First, create a file with your investments in it, following the format from the previous figure, and export the data in CSV format (follow the US standard or adapt the format), or download the CSV in the picture from our repository: [https://github.com/PacktPublishing/Data-engineering-with-dbt/blob/main/Chapter_05/ABC_Bank_PORTFOLIO__2021-04-09.csv](https://github.com/PacktPublishing/Data-engineering-with-dbt/blob/main/Chapter_05/ABC_Bank_PORTFOLIO__2021-04-09.csv).
+2. To read the CSV without problems, we have to provide Snowflake with the settings for how we exported the CSV file. We can do that effectively by defining a `File Format` that we can then reuse every time we use files formatted in the same way.
+
+The following code creates a file format suitable for reading CSV files created by exporting data from Excel using the US locale (the US standard settings):
+
+CREATE FILE FORMAT
+  PORTFOLIO_TRACKING.SOURCE_DATA.ABC_BANK_CSV_FILE_FORMAT
+    TYPE = 'CSV'
+        COMPRESSION = 'AUTO'
+        FIELD_DELIMITER = ','
+        RECORD_DELIMITER = '\n'
+        SKIP_HEADER = 1
+        FIELD_OPTIONALLY_ENCLOSED_BY = '\042'
+        TRIM_SPACE = FALSE
+        ERROR_ON_COLUMN_COUNT_MISMATCH = TRUE
+        ESCAPE = 'NONE'
+        ESCAPE_UNENCLOSED_FIELD = '\134'
+        DATE_FORMAT = 'AUTO'
+        TIMESTAMP_FORMAT = 'AUTO'
+        NULL_IF = ('\\N')
+;
+
+CopyExplain
+
+Note that most of the attributes are optional, as they have the right default, but we provide the same file format that is provided by the **Load Data** wizard if you pick the key values. It is important to note the value for `SKIP_HEADER = 1`, as this allows us to define the first row as a header (to be skipped when loading data). The `FIELD_DELIMITER` and `RECORD_DELIMITER` attributes are important, as they define how the columns are separated in a row and how a row is terminated (`'\n'` is a new line).
+
+The `FIELD_OPTIONALLY_ENCLOSED_BY = '\042'` attribute specifies string-type columns that can be optionally enclosed in double quotes. This is needed if they contain characters with special meaning, such as the delimiters.
+
+1. Now that you have the CSV ready and a file format to read it, go to your Snowflake account in your browser and make sure to select your `DBT_EXECUTOR_ROLE` as the role you impersonate (in the top-right-hand part of the SF UI).
+
+To load the data from the CSV into the table that we created, click on the **Databases** icon in the top-left-hand corner, and then click on the **PORTFOLIO_TRACKING** database in the list that appears. Then, select the row or click on the name of the **ABC_BANK_POSITION** table and click on **Load table** to start the **Load** **Data** wizard:
+
+![Figure 5.6: The Load Data wizard in Snowflake](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_6.jpg)
+
+Figure 5.6: The Load Data wizard in Snowflake
+
+In the **Load Data** wizard, pick the warehouse you want to use to load the data and click **Next** on the **Warehouse** page. Click **Select Files**, select the CSV file you have saved, and then click **Next** on the **Source Files** page. Select the file format that we created and click **Load** on the **File Formats** page. You can click **Next** and then **Load** if you want to explore the next page of the wizard.
+
+Once you click the **Load** button Snowflake will load the CSV file into a stage, then parse it in memory using the file format that we specified and then insert the data into the specified table using a `COPY INTO` command, that is the most efficient way to load big amounts of data.
+
+To check that all is good, go back to **Worksheets** in the SF UI, and then select the database, schema, and table where we loaded the data in the left-hand navigation panel. You should see that the table contains the number of rows that were in your CSV. You can click **Preview Data** to see the first few rows of the data.
+
+### Defining the source data
+
+In a real-life project, you will already have the source data provided to you or your team will have built a pipeline to load it. In the last part of the book, we will get into detail on that part.
+
+Let’s define the dbt source for the data that we have loaded and then access it from dbt.
+
+A best practice to conjugate project order, ease of editing, and to avoid many merge conflicts is to define a different YAML file for each source system that we get data from.
+
+Create a new file named `source_abc_bank.yml` under the `model` folder in the dbt editor with the following content:
+
+version: 2
+sources:
+  - name: abc_bank
+    database: PORTFOLIO_TRACKING
+    schema: SOURCE_DATA
+    tables:
+      - name: ABC_BANK_POSITION
+
+CopyExplain
+
+You can find the source in our repository in the `05_03_v1__source_abc_bank.yml` file inside the materials for [_Chapter 5_](https://subscription.packtpub.com/book/data/9781803246284/5) in the `dbt` folder.
+
+Let’s analyze the preceding file:
+
+- The first line with `version: 2` is mandatory and tells dbt that this YAML file uses the second version of the dbt YAML file specification. Version 1 has been deprecated.
+- The next line with `sources:` declares that we are going to describe some source systems in this file under that declaration.
+- The line with the `name` attribute introduces the first system with its name.
+- Under the system name are a few attributes that better configure the source. The `database` and `schema` attributes indicate to dbt where to look for the tables of this source system.
+- The `tables:` attribute introduces the declarations of the source tables that we are going to use from this source system. We can add as many tables as we need.
+- The `- name: ABC_BANK_POSITION` line introduces the first system table, using the `name` attribute, as we have done with the source systems.
+
+Now, we have left it as simple as possible, but we will see shortly that we will use this declaration to add more functionalities such as describing columns and introducing tests.
+
+With this initial YAML file, we have done a minimal configuration of our first source so that we can access the data simply and flexibly.
+
+We can try our source by writing the following query, which is the simplest for testing a source:
+
+SELECT *
+FROM {{ source('abc_bank', 'ABC_BANK_POSITION') }}
+
+CopyExplain
+
+Note that the names in dbt are case-sensitive, so use the same casing as in the YAML file. This calls for an agreed upon code convention for table and source names inside your project.
+
+By clicking the **Preview** button in the dbt IDE, you ask dbt to compile and run the query on your database, and then take you to the **Query Results** tab, where you can see the results of the query:
+
+![Figure 5.7: Results of a query on a source in dbt's Preview tab](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_7.jpg)
+
+Figure 5.7: Results of a query on a source in dbt's Preview tab
+
+Going to the **Compiled SQL** tab, you can see the SQL that was executed on the database, as shown in the following image. Note that clicking the **</> Compile** button just compiles the code and brings you to the **Compiled SQL** tab, without executing it:
+
+![Figure 5.8: Compiled code for the preceding query in dbt Compile SQL tab](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_8.jpg)
+
+Figure 5.8: Compiled code for the preceding query in dbt Compile SQL tab
+
+We have defined a source system with a source table and checked that it all works fine.
+
+Let’s move on to seeing how we can use this to build our first dbt models.
+
+Tip
+
+Note that names, including model names, are case-sensitive in dbt, so ‘`abc_bank`’ is different from ‘`ABC_BANK`’.
+
+This might be confusing when working with Snowflake, as all names are case-insensitive and always shown in uppercase unless you explicitly quote the name with double quotes.
+
+We use uppercase for model names (so that it matches what you see in SF and works if you copy and paste table names) and lowercase for other objects, such as macros and system names.
+
+Now that we have some content in the `models` folder, you can delete the `.gitkeep` file before we move on to creating our first dbt model in the next section.
+
+![day-mode](https://subscription.packtpub.com/rebuild/build/assets/bookmark-grey-Da6_VjZz.svg)Bookmark
+
+# How to write and test transformations
+
+Now that we have some data, we can start using dbt to transform that data into the information that we want to deliver for reporting or our other use cases.
+
+## Writing the first dbt model
+
+For the time being, we just have one piece of information – the content of the portfolio from ABC Bank that we have loaded in the landing table.
+
+This, in dimensional modeling terms, is a **fact**, which is a table that provides quantitative information about some objects or events that we want to reason about.
+
+To provide more value on top of the data itself, we want to calculate a few other measures for the positions and make them available to our reports.
+
+First, we are going to calculate the profit for each position.
+
+Let’s create a `POSITION_ABC_BANK.sql` file in the **models** folder with this content:
+
+SELECT
+    *
+    , POSITION_VALUE - COST_BASE as UNREALIZED_PROFIT
+FROM {{ source('abc_bank', 'ABC_BANK_POSITION') }}
+
+CopyExplain
+
+Let’s discuss it:
+
+- By using `*` (the star symbol) in the `SELECT` command, we take all the fields from the source we are reading from, so we stay open for future changes
+- We calculate `UNREALIZED_PROFIT` as the difference between the current value and the cost base of the position
+
+Just a note on the file names: we named the CSV file `ABC_BANK_POSITION` and the dbt model `POSITION_ABC_BANK`. Are they good names? Do we risk confusion?
+
+It is common, and logical, to think about the incoming data with the source first and then what the content is, so the name of our CSV reflects this “source first” thinking that is proper for the source and storage layers. When we move to the dbt models in the refined layers, where we convey information, we start thinking in terms of the content (or concept) first and maybe we need or want to recall the source if the data is not of general use or scope. The name of our model conveys that we talk about the _POSITION_ concept and that the content is limited to the ABC Bank system.
+
+So far so good, but if you run the query, it looks like the position for “TRADE DESC INC/THE” with the TTD symbol has a large absolute profit, and the others just a small one. Let’s add a `UNREALIZED_PROFIT_PCT` field to account for the size of the initial investment.
+
+Let’s change the `POSITION_ABC_BANK.sql` file as follows:
+
+SELECT
+    *
+    , POSITION_VALUE - COST_BASE as UNREALIZED_PROFIT
+    , UNREALIZED_PROFIT / COST_BASE as UNREALIZED_PROFIT_PCT
+FROM {{ source('abc_bank', 'ABC_BANK_POSITION') }}
+
+CopyExplain
+
+Now we also have the percent of profit concerning the position cost base.
+
+All looks good, but maybe we do not like the long string of decimals from the division.
+
+Let’s fix it by using the standard `ROUND` function from Snowflake.
+
+Change the line as follows:
+
+    , ROUND(UNREALIZED_PROFIT / COST_BASE, 5)
+        as UNREALIZED_PROFIT_PCT
+
+CopyExplain
+
+Now we have rounded the result to the fifth decimal digit.
+
+You can find the final version of this source file in the Git repository in the `05_04_v1__POSITION_ABC_BANK.sql` file inside the materials for [_Chapter 5_](https://subscription.packtpub.com/book/data/9781803246284/5) in the `dbt` folder.
+
+## Real-time lineage and project navigation
+
+We have produced our very first dbt model from the single source that we have declared, so it is very difficult to get lost in our project now, but if you have experience with data platforms, you know how complicated understanding which transformations are connected becomes.
+
+Stop despairing and click on the **Lineage** tab of the dbt IDE while you are in the `POSITION_ABC_BANK` model.
+
+Lo and behold… you now have a nice, easy-to-read lineage diagram showing the relation of this model with all other models that are related to it:
+
+![Figure 5.9: The initial lineage diagram for the portfolio project](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_9.jpg)
+
+Figure 5.9: The initial lineage diagram for the portfolio project
+
+While there is not much to see now, as we just have declared one source table (shown on the left with a database icon with an arrow) and one model (shown on the right with a cube icon), when your project becomes bigger and more complex, this diagram will be an invaluable guide to easily traversing models and remembering what you have been building.
+
+The lineage diagram is drawn in real time and it is always up to date with your project.
+
+You can also use it to move around the project quickly by double-clicking to go to a model or the definition of a source. The diagram is also dynamic, as you can drag around the boxes to arrange it in a way that makes more sense for you and eventually copy it or print it out to communicate with your colleagues or stakeholders better.
+
+## Deploying the first dbt model
+
+Until now, we have just created the file, saved it a couple of times after each change, and run it using the **Preview** button feature on dbt Cloud – anyway, no table exists in our database yet and no code has been saved in our repository. Let’s fix it.
+
+To deploy our code in our DEV environment, we must manually execute the desired dbt commands using the command line at the bottom of the IDE.
+
+Execute the following command to run all the models (even if for now, we have only one!) and deploy them to SF:
+
+dbt run
+
+CopyExplain
+
+After a few seconds, the command completes successfully and your model is created in the database, but where?
+
+It will be created in the schema that you named in the wizard when you did the Snowflake configuration when creating this project. I used `RZ` and we suggested using your initials.
+
+It also is the same schema where the initial default project was created when we used `dbt run` to test that everything was configured correctly.
+
+To deploy the code in your DEV environment, you will run the commands manually, as it is common to add one model at a time and change it a few or many times before being happy with it, not wanting to run everything at every change. By running manually, you can run and test what you feel is right at any moment.
+
+We will see that to deploy in a deployment environment, you will use a job – that is, a sequence of dbt commands. You will define it once and run it every time that you want to deploy and run that environment.
+
+The nice thing is that you can define multiple jobs for each environment so that you can have a job that runs everything and another one that just loads the data that changes hourly and only refreshes whatever depends on that data.
+
+## Committing the first dbt model
+
+We have now generated the model in our database by running the needed dbt command, but the code of the model only exists on the dbt Cloud server and is not in our Git repository.
+
+To add the current version of the code to our Git repository, we must commit the changes.
+
+You can do that very easily in dbt Cloud, as it has a guided Git workflow that allows you to easily create a Git branch, then commit the changes while you develop and finally, open a **Pull Request** (**PR**) to merge that development into the `main` or `master` branch.
+
+To commit the current code for the project, models, and configs, click on the green **commit …** button in the top-left-hand corner of the dbt IDE and then enter a commit message in the popup that will open up. Clicking on the **commit** button will send the code to Git as a new commit.
+
+Remember to save all your open models and config files before completing a commit, as only what is saved will be committed. In any case, rest assured that the dbt IDE will warn you if you have unsaved files.
+
+Now that you have committed them, your changes are saved also to your Git repository, and most importantly, are now available for everyone else that can access the repository.
+
+After each commit, while the code on your IDE is not changed since the last commit, you can open a PR to share the code with your colleagues and start to gather feedback or request a final approval to merge it back into the `main` branch. We will come back to collaboration in later chapters.
+
+## Configuring our project and where we store data
+
+The schema that you define in your dev credentials is the schema where your development environment will exist and, if we do nothing, everything we create will be generated in that schema.
+
+Note that the schema for our DEV environment or a deployment environment is often referred to in the dbt documentation as target schema and it is available in the code as `{{` `target.schema }}`.
+
+Over time, having everything generated in the same single schema will become chaotic, and because one of our main goals is to create and maintain an environment that makes life easier for the developers, let’s fix it and start creating a bit more order by configuring different parts of the dbt project to be created in different schemata in our environment.
+
+The problem is that our environment is defined as a schema and, in a database, you cannot have a schema nested into another schema, so we cannot create multiple schemata inside the target schema for our DEV environment.
+
+To overcome this problem, dbt will generate the tables and views in multiple schemata that have the name composed by the name of our target schema followed by the name of the custom schema that we have defined for the specific content, with the final name of the schema having the following layout: `<target_schema>_<custom_schema>`.
+
+As an example, if my target schema is `RZ` and the content is configured to go into a custom schema named `REFINED`, then the actual schema name when the content is deployed in my environment will be `RZ_REFINED`. The same content deployed to an environment that has a target schema of `PROD` will be created in the `PROD_REFINED` schema.
+
+To recap, remember that you define the target schema where you define the environment, usually along with the connection details, while you configure the custom schema in the main dbt `config` file, or you override it along the project, as with any other configuration.
+
+### The main configuration file
+
+The main element that we use to define and configure the dbt project, including where resources are created, is the main configuration file, `dbt_project.yml`.
+
+dbt defines the folder that contains the `dbt_project.yml` file as the dbt project folder and this file contains the essential and general configuration for the project, which can be eventually overridden at more specific levels.
+
+Open it and follow along with our description and changes.
+
+In the first lines, usually 5 to 7, you will find the following:
+
+name: 'my_new_project'
+version: '1.0.0'
+config-version: 2
+
+CopyExplain
+
+It is a good practice to change the name to something meaningful, so we will name it `'portfolio_tracking'`.
+
+You can change the version to `'0.1.0'` and update it when you do minor releases or leave it as it is and just update it when you do major releases. We will leave it unchanged.
+
+Do not change `config-version`, as that specifies the version of the definition of the configuration to use and version 2 is the one in use now.
+
+Moving down, you find the profile name to use around line 10, as shown here:
+
+profile: 'default'
+
+CopyExplain
+
+This is not used in dbt Cloud, but it is used in dbt Core to select which connection profile to use from the many that can be defined in the connection configuration file.
+
+After this, there are the definitions of the paths where dbt finds the different types of objects, puts the generated code, and what to clean up if you run a `dbt` `clean` command.
+
+This is usually in lines 15 to 25, as shown here:
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+target-path: "target"  # directory for compiled SQL files
+clean-targets:         # directories to be removed by `dbt clean`
+  - «target»
+  - «dbt_packages"
+
+CopyExplain
+
+Do not change these, as they are fine unless you have very special needs.
+
+The last part in the default `config` file is about configuring models and other dbt objects, as we will see in a second. Over time, we might add configurations for other elements such as seeds, snapshots, variables, sources, tests, and any other feature that we want to configure globally for the project.
+
+The model configuration still reflects the old name and the example project, so let’s change it to suit our current needs, as exemplified here:
+
+models:
+  portfolio_tracking:
+    +materialized: view
+    refined:    # Applies to all files under models/refined/
+      +materialized: table
+      +schema: REFINED
+
+CopyExplain
+
+You can find the initial version of this source file in our repository in the `05_05_v1__dbt_project.yml` file inside the materials for [_Chapter 5_](https://subscription.packtpub.com/book/data/9781803246284/5) in the `dbt` folder.
+
+Let’s review what we have configured:
+
+- Under the general `models:`, a label that applies to all models from all projects, we have nested the name of our project, `portfolio_tracking:`, to only configure the models of this project.
+- Under our project, we have added the model-specific `materialized` configuration with a value of `view`, as we want that our models to be created as views by default.
+
+We have added a `+` symbol in front of the configuration keywords, like `schema`, to make it easier to distinguish between them and folder names that are used to hierarchically apply the configurations. Note that `+` is optional and used only for better readability.
+
+- Under our project, we have then named the `refined` folder, which does not yet exist, but we can already declare configurations for it and its subfolders.
+- Under the `refined` folder, we have declared the model-specific `materialized` configuration again with a value of `table`, as we want the models that are placed under it to be materialized as tables.
+- Under the `refined` folder, we have also declared the `schema` configuration with a value of `REFINED`, as we want that the models under it to be created in a schema with the custom schema part of `REFINED`.
+
+To recapitulate, if we do not define any custom schema for our models, they will be created in the target schema, which is the one that we have defined in the connection configuration. If we define a custom schema, the models will be created in a schema with the name composed by the target schema and the defined custom schema; this ensures that each developer or environment will have its database objects created in schemata with different, unique names.
+
+## Re-deploying our environment to the desired schema
+
+After our first deployment, we added the configuration to be able to generate _refined models_ into a custom `refined` schema.
+
+If we now run the `dbt run` command again… nothing changes.
+
+Why? Because we have configured models in the `refined` folder to go to the `refined` schema, and our `POSITION_ABC_BANK` model is in the `model` folder, not in the `model/refined` folder.
+
+Let’s create the folder, move the model, and re-run the project:
+
+![Figure 5.10: Menus to create the folder and the result with the file moved](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_10.jpg)
+
+Figure 5.10: Menus to create the folder and the result with the file moved
+
+If you hover over the **models** folder in the dbt IDE, it will be highlighted and at the right end, you will see a menu appear indicated by three dots. Click the three dots and then the **New Folder** menu entry.
+
+Type `refined` in lowercase, as done in the configuration file, for the folder name. Please remember that in dbt, file and folder names are case-sensitive.
+
+To move the **POSITION_ABC_BANK** model, hover over its name, click the three dots for the menu, and select the **Rename** entry.
+
+Add `refined/` before the filename so that the full path reads `models/refined/POSITION_ABC_BANK.sql` and click the **Save** button.
+
+You will see that the file now appears under the `refined` folder.
+
+We can now run the project again to create the model where we configured it.
+
+Execute the usual command on the command line of the dbt IDE:
+
+dbt run
+
+CopyExplain
+
+You can now go to your Snowflake database and check that the **POSITION_ABC_BANK** table has been created under the **RZ_REFINED** schema (replace **RZ** with your target schema). Please also note that the schema has also been created for you without the need for any extra action on your part:
+
+![Figure 5.11: The content of our Snowflake database before and after re-running the project](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_11.jpg)
+
+Figure 5.11: The content of our Snowflake database before and after re-running the project
+
+While you expect to find the new table where it is, you might be surprised that the old **POSITION_ABC_BANK** view in the **RZ** schema (replace **RZ** with your target schema) is still there.
+
+This is the general behavior for dbt: it will never delete tables or views unless strictly necessary (as an example, it is necessary for a model change materialization from a view to a table or the other way around, as you cannot have two database objects with the same name in the same database schema).
+
+This behavior is in place to safeguard your data, as in many databases, it will be impossible to recover deleted tables. dbt leaves the responsibility to you to take a possibly destructive action that can be avoided by dbt and delegates to your superior judgment.
+
+The consequence is that old models can pile up and clutter your environment if you do not clean them up. So, let’s do that.
+
+In your Snowflake UI, run the following command to drop the old view:
+
+DROP VIEW "PORTFOLIO_TRACKING"."RZ"."POSITION_ABC_BANK";
+
+CopyExplain
+
+Replace **RZ** with your target schema and the names with ones you choose.
+
+Thinking better, do we really need the **RZ** schema? No – let’s drop it then.
+
+In your Snowflake UI, run the following command to drop the **RZ** schema:
+
+DROP SCHEMA "PORTFOLIO_TRACKING"."RZ";
+
+CopyExplain
+
+Very well, we have easily cleaned up our DEV environment, and this is the way to go to keep it clean while you are developing and changing ideas on model names (frequent) and places (rare after the initial models).
+
+Would that be a good way to manage a common QA or TEST environment or a PROD environment? No, manually managing an environment is advisable only for your own DEV environment and only for models that have not yet been released to another environment. As they only exist in your environment, we advise keeping the management lightweight and managing them directly with manual commands on the database.
+
+For models that have been released to other environments, we need the changes to be applied consistently and at the right moment in every environment, so it cannot be done by hand – it must be automated.
+
+Automated changes to databases are often called **database migrations**, as they migrate the database from one state to another and can be applied by specialized software such as Flyway or Liquibase.
+
+We will see in the following chapters that the same approach can be used with dbt by using trivially simple dbt macros to hold the SQL code and the `run-operation` command to execute them.
+
+To recap the concept: before you release a model, it is private to you and you can manage it by hand, but once it is released to the world, a consistent approach is needed and we will use the concept of database migrations to apply these changes in all the needed environments.
+
+## Configuring the layers for our architecture
+
+Now that we have talked about where we want our models to be generated, it is a good time to think about the overall architecture that we have discussed and start to put in place the configuration to make it happen.
+
+Let’s see how we will organize the three layers that we have defined:
+
+- **Data storage layer**: We will teach you to implement this layer in two ways – with _dbt snapshot_ and with _insert-only ingestion into history tables_. In both cases, we will configure the snapshots or models to go into their own schema; the main difference is that snapshots are global, meaning that every environment uses the same snapshot, and will be stored in the `snapshots` folder, while the history tables are implemented with normal models stored in a `staging` folder and are therefore individual to each environment, allowing more freedom and scalability.
+- **Refined data layer**: We have already configured the `refined` folder so that the model under it will be generated in the `refined` schema.
+- **Data delivery layer**: The data delivery layer is implemented with one or more data marts. The models for each data mart are created in their own folder under the `marts` folder and each mart is created in its own schema in the database.
+
+Let’s prepare our configuration to have all the layers set up.
+
+Both model and snapshot configurations can be stored in the main configuration file, `dbt_project.yml`, so open and update it as follows:
+
+models:
+  portfolio_tracking:
+    +materialized: view
+    staging:    # Data storage layer
+      +materialized: view
+      +schema: STAGING
+    refined:    # Refined data layer
+      +materialized: view
+      +schema: REFINED
+    marts:      # Data delivery layer
+      portfolio:     # one specific data mart
+        +materialized: table
+        +schema: MART_PORTFOLIO
+snapshots:
+  portfolio_tracking:
+    +target_schema: SNAPSHOTS
+
+CopyExplain
+
+You can find the updated version of this source file in our repository in the `05_05_v2__dbt_project.yml` file inside the materials for [_Chapter 5_](https://subscription.packtpub.com/book/data/9781803246284/5) in the `dbt` folder.
+
+Let’s review the configuration:
+
+- The contents of the `staging` folder are now created in the `STAGING` schema, as views by default.
+
+This configuration will be used for the incremental-only ingestion using staging views, configured at the folder level, and history tables that will be incrementally loaded and individually configured for that.
+
+- The contents of the `refined` folder are now created in the `REFINED` schema, as views by default.
+- The contents of the `portfolio` folder, nested under the `mart` folder, will be created in the `MART_PORTFOLIO` schema, as tables by default.
+- The snapshots of this project, organized under the `snapshot` folder, will be created in the `SNAPSHOTS` schema. They are always generated as tables, loaded incrementally.
+
+Generating views or tables for the different layers is mostly a performance choice, as they are functionally equivalent. Tables are slower to create and take up space on storage, but they are much quicker to query.
+
+Therefore, it makes sense to materialize models that are queried multiple times during the ELT as tables so that the calculations are performed only once, as well as for models queried by end users in interactive mode so that the query executes in the shortest time possible.
+
+In the previous section, we configured the refined layer to be generated as tables; that is a sensible choice when we do not have a data mart layer yet and the refined layer is also our delivery layer.
+
+The delivery layer is usually materialized at tables, but if you are using a BI tool that stores the data from your data mart layer internally, such as Power BI, it is a sensible choice to generate the layer as views, because each view will be queried once to load the data in the tool.
+
+## Ensuring data quality with tests
+
+Until now, we have loaded data from a CSV into a landing table and created a model to read the data out of it, but how can we ensure that our data is sound?
+
+How can we deliver real data quality?
+
+The best way is to make data quality a real thing and not just hope it defines exactly what we expect as input and output and then check that the data adheres to these requirements. This is the essence of being able to define runnable tests on our data.
+
+In dbt, we can define two types of tests:
+
+- **Generic tests**, once called schema tests, are tests that are generic in nature and are therefore codified in a parametrized query, which can be applied to any model or any column in any model by naming them in a YAML configuration file.
+
+Examples of generic tests defined by default in dbt are tests that a column is not `null` or has unique values, but we can define our own tests, such as testing whether a hash column does not incur a hash conflict.
+
+- **Singular tests** are the most generic form of test, as you can test everything that you can express in SQL. You just need to write a SQL query that returns the rows that do not pass your test, no matter what you would like to test, whether individual calculations, full table matches, or subsets of columns in multiple tables.
+
+Generic tests are configured in YAML configuration files and allow us to easily test common requirements in a large number of tables and columns by just defining the requirement – no other effort is needed.
+
+dbt comes with four types of generic tests already implemented:
+
+- `not_null`: Tests that a column is never `null` in the table.
+- `unique`: Tests that the values in a column are unique.
+- `relationships`: Tests the referential integrity between two tables, meaning that each value of the foreign key in the table exists in the named column of the named table. Said in another way, you test that there are no _orphans_ in the tested table.
+- `accepted_values`: Tests that the values in the column are one of the listed values.
+
+You can easily write your own tests (and we will do so) or use libraries that provide more ready-to-use tests, such as `expression_is_true` or `accepted_range`, which are provided by the `dbt_utils` library.
+
+Singular tests are written for specific cases when a generic test is not available and creating one does not make sense.
+
+The singular tests are like normal models, but they are stored under the `test` folder, and they are executed when you run the `dbt test` command, not when we use `dbt run`. Of course they are also run when you execute `dbt build`, that puts `run` and `test` together.
+
+### Testing that we have good source data
+
+Let’s make use of dbt capabilities to make sure that we get sound data as input.
+
+Logically, we start from a list of our expectations on the incoming data and then we declare (if we have a suitable generic test) or write (if we need a singular test) the dbt tests to confirm or deny our expectations.
+
+Open the file named `source_abc_bank.yml`, which describes our source, so that we can add the tests that describe our assumptions about the data.
+
+Go to the definition of the source table and start to modify it as follows, adding a description for the table and the first test declaration:
+
+    tables:
+      - name: ABC_BANK_POSITION
+        description: >
+           The landing table holding the data imported
+           from the CSV extracted by ABC Bank.
+        columns:
+          - name: ACCOUNTID
+            description: The code for the account at  ABC Bank.
+            tests:
+              - not_null
+
+CopyExplain
+
+In the sample code here, we have added a description of the table, introducing the notation that allows you to enter multi-line text in YAML. Using the `>` character, you declare that the following block of text is all a single string to be fetched into the declared field.
+
+We have also introduced `columns:`, the declaration that allows us to describe test-specific, individual columns of the table.
+
+Under the `columns:` declaration, we have introduced the first column, declared using the `name` attribute, followed by the column `description` and the `tests` attribute, which will hold a list of tests.
+
+We have then declared our first test, `not_null`, requiring that no row of the table contains the `null` value for the `ACCOUNTID` column. Note that this is independent of the database column being declared nullable or not.
+
+The `not_null` test is by large the most used test, as it is very common that we want to be sure that the data that we get, or produce, always have not null data in the tested columns.
+
+Practical tip
+
+Before we move to the other tests that we want to introduce for this data source, here’s a bit of practical advice for dealing with YAML files.
+
+Please note how in YAML files, the alignment is key to defining the structure, so try to be precise with it or you will experience compilation errors, as the YAML interpreter will not be able to correctly parse your configuration files.
+
+After you add the new piece of configuration, check that it says **ready** in green in the bottom-right-hand corner of the dbt IDE to be sure the project compiles correctly. To ensure that you do not introduce compilation errors, you can glance at it when you save more changes.
+
+When this happens and you do not have a clue even after reading the error message, we suggest removing the block that you changed so that the compilation is correct again and then adding back one bit at a time to understand where the problem that blocks the compilation is.
+
+Let’s continue adding and commenting on the desired tests for the other columns of the table:
+
+          - name: SYMBOL
+            description: The symbol of the security at ABC Bank.
+            tests:
+              - unique
+              - not_null
+
+CopyExplain
+
+Next, we are configuring the description and the tests for the `SYMBOL` column, which we assume to be a good natural key for a position in a bank.
+
+For this reason, we have declared both the `not_null` and `unique` tests, which are the signature of a unicity constraint such as a key, whether natural or surrogate.
+
+          - name: DESCRIPTION
+            description: The name of the security at ABC Bank.
+            tests:
+              - not_null
+
+CopyExplain
+
+In the preceding piece of configuration, we are configuring the description and the tests for the `DESCRIPTION` column, which we want to be `not_null`, as it has the name of the security.
+
+          - name: EXCHANGE
+            description: >
+                The short name or code of the exchange
+                where the security is traded.
+            tests:
+              - not_null
+
+CopyExplain
+
+In the preceding piece of configuration, we are configuring the description and the tests for the `EXCHANGE` column, which we want to be `not_null`, as it has the name or code of the exchange where the security has been purchased. We will talk about naming in greater depth in reference to the STG model.
+
+We might also consider expressing that the exchanges values should be limited to a list of known values with the `accepted_values` test, but as we do not have any reason to limit the values, such a test would just generate a false positive when it fails, prompting us to maintain the list to add new values.
+
+Note that this could be a sensible strategy if we need to be alerted on new exchanges being used due to any regulations or to be sure that other data or authorizations are in place.
+
+We would then add the authorized or configured exchanges to the list accepted by the test and would get errors if others are used that we have not named as accepted.
+
+          - name: REPORT_DATE
+            description: >
+              The date of the report was extracted by ABC Bank.
+              We consider this position to be the effective
+from this date forward, until a change is seen.
+            tests:
+              - not_null
+
+CopyExplain
+
+For the `REPORT_DATE` column, we want it to be `not_null`, as we need to be able to know on what date the information in the position was referred to. Time matters a lot in reality and, in terms of data warehousing, this could be the subject of entire books. We will talk about it often.
+
+          - name: QUANTITY
+            description: >
+                The number of securities we hold in the
+                portfolio at ABC Bank at the Report Date.
+            tests:
+              - not_null
+
+CopyExplain
+
+For the `QUANTITY` column, we want it to be `not_null`, as we need to know how many securities we have. It does not help at all just to know “the portfolio has some of this security” without knowing the actual number of shares or titles that are owned.
+
+          - name: COST_BASE
+            description: >
+                The cost we paid for the securities that
+                we hold in the portfolio at
+                ABC Bank at the Report Date.
+            tests:
+              - not_null
+
+CopyExplain
+
+For the `COST_BASE` column, we would like it to be `not_null`, as we can then use the value to calculate the position profit. We could probably survive without this piece of info, but as we are going to use it, assuming we have the value, let’s put the test in place, and if at some point it fails, we will have to evaluate what to do.
+
+Now, we would not be able to replace it, but down the line, we might have a position open date, changes made to it, and historical quotations related to it, allowing us to calculate a rolling value of the cost base. We understand that calculating it would be less accurate and more complex than just knowing it, but if we are unable to get that info from certain banks, there are not many alternatives.
+
+For the moment being, as we are going to use this piece of data, let’s ask dbt to keep an eye on it for us.
+
+          - name: POSITION_VALUE
+            description: >
+            The value of the securities  in the portfolio
+            at ABC Bank on the Report Date.
+            tests:
+              - not_null
+
+CopyExplain
+
+For the `POSITION_VALUE` column, we would like it to be `not_null` so that we can calculate the position profit. Our considerations as to whether this would become `null` are analogous to the ones related to the `COST_BASE` column. As we are using it, let’s have the test.
+
+          - name: CURRENCY
+            description: >
+  The currency for the monetary amounts of the position.
+            tests:
+              - not_null
+
+CopyExplain
+
+For the `CURRENCY` column, we would like it to be `not_null`, as we need to know in what currency the monetary amounts are expressed, and it would be a huge limitation to assume that all the amounts are already expressed in a single currency.
+
+We already use the amounts, and in the future, we will need to be able to convert all the amounts into a single currency to be able to calculate totals. Let’s have the test in place so we know that our plan is not in jeopardy.
+
+Putting together all the individual pieces of configuration that we have gone through, we now have the contents of the new `source_abc_bank.yml` file.
+
+You can find the updated version of this source file in our repository in the `05_03_v2__source_abc_bank.yml` file inside the materials for [_Chapter 5_](https://subscription.packtpub.com/book/data/9781803246284/5) in the `dbt` folder.
+
+Important note
+
+Tests are very useful throughout the data life cycle.
+
+Here, our discussion introduced them after we had created the source and the first model, to avoid overloading you with too many new topics. In the reality of projects, it is useful to write tests while you write the sources and models.
+
+Tests are especially useful when getting started with data that we do not fully know, as they allow the data engineer to express and verify his assumptions easily and quickly.
+
+Knowing whether the expected unicity constraints and nullability of fields, especially foreign key and relational integrity constraints, are fulfilled is very important when designing the ELT transformations on the data.
+
+Tests allow us to initially analyze, then fully describe, and finally, constantly monitor the quality of the incoming data, making our ELT much more reliable and the results trustworthy.
+
+### Running the test
+
+Now that we have added our first tests, how do we use them?
+
+In dbt, you execute the tests with the `dbt test` command, in a very similar manner as we have seen for running the dbt models.
+
+Go to the dbt Cloud command line and run the following command:
+
+dbt test
+
+CopyExplain
+
+The preceding command will execute all the tests in the dbt project and you will see that the command-line area opens to show the execution first and then the results of the tests:
+
+![Figure 5.12: Test results](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_12.jpg)
+
+Figure 5.12: Test results
+
+You will see that your tests are run and once completed, they have a green checkmark on the right if they pass, an orange exclamation mark if they produce a warning, and a red “x” sign if they fail.
+
+You can open the line for each test to access the summary result, detailing the test result and its duration, and the details where you can also see the exact query that is run on your Snowflake database.
+
+Right now, we have only defined tests for a single source table, so running all the tests is perfectly fine, but thinking about the future, it is important to be able to just run the tests for the source or models that you want.
+
+The following commands provide you with alternatives for controlling the tests you run better:
+
+- Run the tests on all the sources:
+    
+    **dbt test -s source:***
+    
+    CopyExplain
+    
+- Run the tests on all the tables in the `abc_bank` source:
+    
+    **dbt test -s source:abc_bank.***
+    
+    CopyExplain
+    
+- Run the tests on the `ABC_BANK_POSITION` table of the `abc_bank` source:
+    
+    **dbt test -s source:abc_bank.ABC_BANK_POSITION**
+    
+    CopyExplain
+    
+
+In the following chapters, we will look more into the model selection syntax that dbt provides to allow you to build commands that run or test exactly which models you want.
+
+### Testing that we deliver sound information
+
+Now that we are sure that the incoming data fulfills our expectations, it is time to make sure that what we deliver does the same.
+
+Writing tests that verify what we want to deliver will serve us well in many ways:
+
+- To make sure that we got it right when we are writing the code the first time.
+- It provides a clear and very valuable piece of documentation, which will stay up to date with our code or fail and call our attention if the code or the data does stop abiding by it.
+
+In this regard, it is important to note that the tests provide such valuable information for documenting the project that dbt uses them to enrich the project documentation.
+
+- It will keep monitoring that every future change that we or someone else makes to our code will still fulfill our expectations and the contract that our clients have taken into use.
+
+We have created our model in the `refined` folder, so let’s create a YAML file named `refined.yml` in the `refined` folder to host our tests and a description of the transformations that we have implemented in the `refined` folder.
+
+As always, in our YAML files, let’s start with the version and the type of entities that we are going to describe in the file. Start the file with these two lines:
+
+version: 2
+models:
+
+CopyExplain
+
+The version is always 2, as this is the current definition of the YAML file in use – then, we use the `models` keyword to declare that we are going to describe some models.
+
+As we have done with the source too, first, we identify the model that we want to describe and test using the `name` entry, and then we can enter a description that, besides helping us developers, will be used in the documentation:
+
+  - name: POSITION_ABC_BANK
+    description: The positions we have in the ABC Bank portfolio.
+
+CopyExplain
+
+Nested inside a model, `columns` allows us to name the columns that we want to describe and test:
+
+    columns:
+      - name: UNREALIZED_PROFIT
+        description: The unrealized profit on the position.
+        tests:
+          - not_null
+
+CopyExplain
+
+In the preceding code, we have identified the `UNREALIZED_PROFIT` column of the `POSITION_ABC_BANK` model and we have declared the test as `not_null`, as we expect to always have data in that column.
+
+- name: UNREALIZED_PROFIT_PCT
+        description: >
+          The unrealized profit percentage on the position.
+        tests:
+          - not_null
+
+CopyExplain
+
+Also, for the `UNREALIZED_PROFIT_PCT` column, we have declared that we expect it to contain data by using the `not_null` test.
+
+Both tests will be executed when we run the tests on the model or all the models of the project.
+
+To run all the tests, go to the dbt Cloud command line and run the following command:
+
+dbt test
+
+CopyExplain
+
+The preceding command will execute all the tests in the dbt project and you will see that the command line area opens to show the execution first and then the results of the tests.
+
+To just run the tests on the `POSITION_ABC_BANK` model, run the following command:
+
+dbt test -s POSITION_ABC_BANK
+
+CopyExplain
+
+We have now created tests that verify that we get good data as input and that we deliver good data at the end of our still trivial transformations.
+
+## Generating the documentation
+
+The next thing that is important to get familiar with is the documentation that is automatically generated by dbt based on our code.
+
+To generate the documentation, run the following command:
+
+dbt docs generate
+
+CopyExplain
+
+You will notice that once the generation is finished, in a few seconds, there will be a small popup in the upper-left-hand part of your DEV environment telling you that your docs are ready to view, as shown in the following screenshot:
+
+![Figure 5.13: The development environment during the doc generation and at the end](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_13.jpg)
+
+Figure 5.13: The development environment during the doc generation and at the end
+
+Click on the **view docs** link and a new browser tab will open with the dbt-generated documentation. It will look like the following screenshot:
+
+![Figure 5.14: The dbt documentation home page](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_14.jpg)
+
+Figure 5.14: The dbt documentation home page
+
+You can browse around, even if there is not very much there yet for now.
+
+Click on the blue round button in the bottom-right-hand corner of the page to open the lineage graph:
+
+![Figure 5.15: dbt lineage graph of our first model](https://static.packt-cdn.com/products/9781803246284/graphics/image/B18572_05_15.jpg)
+
+Figure 5.15: dbt lineage graph of our first model
+
+The lineage graph will be very simple for now, as it only has to show that we have the `ABC_BANK_POSITION` source table from the `abc_bank` source system (shown in green in the lineage graph), which is used by (as in, the data flows to) the `POSITION_ABC_BANK` dbt model (shown in light blue in the lineage graph).
+
+![day-mode](https://subscription.packtpub.com/rebuild/build/assets/bookmark-grey-Da6_VjZz.svg)Bookmark
+
+# Summary
+
+Congratulations – your first data application is running!
+
+In this chapter, we started to develop our example application in dbt and followed all the steps to create, deploy, test, and document a data application, even if this one is still very simple.
+
+In the next chapter, we will introduce more real-life requirements for this data application and we will have to adapt our code to consider them, so we will start to learn how to refactor our models and write maintainable code.
